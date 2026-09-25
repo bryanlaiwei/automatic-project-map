@@ -37,6 +37,8 @@ npm run typecheck
 npm test
 npm run dev:api
 npm run dev:web
+npm run dev:worker
+npm run dev:helper
 ```
 
 `npm test` needs `DATABASE_URL` and the migrations in `supabase/migrations` applied. `supabase start` does both. Tests that talk to GitHub are mocked.
@@ -71,10 +73,14 @@ Day 1 builds login, the single-repository GitHub connection, webhook reception, 
 
 Day 2 makes collection recoverable. The helper keeps per-session checkpoints and an upload queue in SQLite. Eligible sessions are queued from the beginning of the log, including opening messages found after the helper starts. A session created before tracking stays excluded when it is resumed. Appended lines are queued once. If the upload fails, the queue is still there after a restart and the same event ids are sent again.
 
-Pair the helper from the signed-in site, then pick folders on the local page:
+Start the helper, then click "Connect local helper" in the signed-in web app:
 
 ```bash
-npm start -w @apm/collector -- serve
+npm run dev:helper
 ```
 
-The page listens on `http://127.0.0.1:47321`. Create a pairing code in the web app and paste it there. The helper stores a revocable device token. `DELETE /collector/token` with that token stops further uploads.
+The web app creates a one-time code and hands it to the helper at `http://127.0.0.1:47321`. If the helper cannot be reached, the web app shows the code so you can paste it on the helper page. The helper stores a revocable device token. `DELETE /collector/token` with that token stops further uploads. Open the helper page to add the project folders; only sessions whose working folder is inside one of them are uploaded.
+
+While it runs, the helper scans the agent logs every 30 seconds and uploads what it queued. It reads `~/.codex/sessions` and `~/.claude/projects` by default. Cursor sessions are read only from a folder set in `APM_CURSOR_SESSIONS`, because Cursor does not write `session.json` and `transcript.jsonl` without a hook. Files that have not changed since the last scan are skipped. A session's new messages are split into events of at most 200 messages and 256 KiB, and a single message longer than 32 KiB is shortened. The queue is sent in requests of at most 100 events and 448 KiB, so it always fits the API's limits. When the API is unreachable, the helper retries after 5 seconds, then doubles the wait up to 5 minutes. When the API refuses the device token, the helper page asks you to connect again. Events the API rejects for good (for example a session created before tracking) are dropped from the queue. The page shows the last scan, the last upload, what is waiting, and any paused sessions, and has a "Scan now" button.
+
+The worker (`npm run dev:worker`) runs two pg-boss schedules. Every minute it processes webhook deliveries that are still queued a minute after they arrived, for example because the API stopped mid-request. Every 5 minutes it asks GitHub for the current state of open pull requests and unfinished workflow runs seen in the last 30 days and 24 hours, and stores an update when GitHub reports a newer one. A delivery whose processing fails is retried by the sweep and marked `failed` after 5 attempts; it no longer holds up the deliveries behind it.

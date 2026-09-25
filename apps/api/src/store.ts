@@ -219,19 +219,46 @@ export async function enqueueDelivery(
   return (result.rowCount ?? 0) > 0 ? "queued" : "duplicate";
 }
 
-export async function processQueuedDeliveries(pool: Pool, github?: GithubLookup): Promise<number> {
+export const deliveryAttemptLimit = 5;
+
+export async function processQueuedDeliveries(
+  pool: Pool,
+  github?: GithubLookup,
+  options: { olderThanSeconds?: number; deliveryIds?: string[] } = {},
+): Promise<number> {
   const queued = await pool.query<DeliveryRow>(
     `select delivery_id, event_name, payload, status
      from webhook_deliveries
      where status = 'queued'
-     order by received_at asc`,
+       and received_at <= now() - make_interval(secs => $1)
+       and ($2::text[] is null or delivery_id = any($2::text[]))
+     order by received_at asc
+     limit 200`,
+    [options.olderThanSeconds ?? 0, options.deliveryIds ?? null],
   );
   let processed = 0;
   for (const delivery of queued.rows) {
-    await processDelivery(pool, delivery, github);
-    processed += 1;
+    try {
+      await processDelivery(pool, delivery, github);
+      processed += 1;
+    } catch (error) {
+      await recordDeliveryFailure(pool, delivery.delivery_id, error);
+    }
   }
   return processed;
+}
+
+async function recordDeliveryFailure(pool: Pool, deliveryId: string, error: unknown): Promise<void> {
+  const message = error instanceof Error ? error.message : String(error);
+  await pool.query(
+    `update webhook_deliveries
+     set attempts = attempts + 1,
+         note = left($2, 500),
+         status = case when attempts + 1 >= $3 then 'failed' else 'queued' end,
+         processed_at = case when attempts + 1 >= $3 then now() else processed_at end
+     where delivery_id = $1`,
+    [deliveryId, message, deliveryAttemptLimit],
+  );
 }
 
 export async function processDelivery(pool: Pool, delivery: DeliveryRow, github?: GithubLookup): Promise<void> {

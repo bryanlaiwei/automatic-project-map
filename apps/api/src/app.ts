@@ -152,7 +152,7 @@ export function createApp(deps: AppDeps) {
       res.status(202).json({ accepted: true, duplicate: true });
       return;
     }
-    await processQueuedDeliveries(deps.pool, deps.github);
+    await processQueuedDeliveries(deps.pool, deps.github, { deliveryIds: [deliveryId] });
     res.status(202).json({ accepted: true, duplicate: false });
   });
 

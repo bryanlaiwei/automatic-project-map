@@ -6,7 +6,8 @@
     "./env": "./src/env.ts",
     "./db": "./src/db.ts",
     "./store": "./src/store.ts",
-    "./github-enrich": "./src/github-enrich.ts"
+    "./github-enrich": "./src/github-enrich.ts",
+    "./github-refresh": "./src/github-refresh.ts"
   },
   "type": "module",
   "scripts": {
