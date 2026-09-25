@@ -1,0 +1,2 @@
+{"role":"user","message":{"content":"Build the reset page."}}
+{"role":"assistant","message":{"content":[{"type":"text","text":"The page is in the frontend folder."}]}}

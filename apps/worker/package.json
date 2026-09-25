@@ -9,6 +9,7 @@
     "typecheck": "tsc --noEmit"
   },
   "dependencies": {
+    "@apm/api": "*",
     "@apm/shared": "*",
     "pg-boss": "^10.3.2"
   },

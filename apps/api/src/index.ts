@@ -1,13 +1,19 @@
-import express from "express";
-import { SCHEMA_VERSION } from "@apm/shared";
+import { loadEnvFile } from "./env.js";
 
-const port = Number(process.env.API_PORT ?? 4000);
-const app = express();
+loadEnvFile();
 
-app.get("/health", (_req, res) => {
-  res.json({ ok: true, schemaVersion: SCHEMA_VERSION });
+const { createApp } = await import("./app.js");
+const { verifySupabaseUser } = await import("./auth.js");
+const { getPool } = await import("./db.js");
+
+const secret = process.env.GITHUB_WEBHOOK_SECRET ?? "";
+const app = createApp({
+  pool: getPool(),
+  webhookSecret: secret,
+  verifyUser: verifySupabaseUser,
 });
 
+const port = Number(process.env.API_PORT ?? 4000);
 app.listen(port, "127.0.0.1", () => {
   console.log(`api listening on http://127.0.0.1:${port}`);
 });

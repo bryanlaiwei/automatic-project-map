@@ -1,10 +1,10 @@
-import { SCHEMA_VERSION } from "@apm/shared";
+import { loadEnvFile } from "@apm/api/env";
 
-const databaseUrl = process.env.DATABASE_URL;
-if (!databaseUrl) {
-  console.log(
-    `worker ready (schema ${SCHEMA_VERSION}); DATABASE_URL is unset, so no jobs are running`,
-  );
-} else {
-  console.log(`worker ready (schema ${SCHEMA_VERSION})`);
-}
+loadEnvFile();
+
+const { getPool } = await import("@apm/api/db");
+const { processQueuedDeliveries } = await import("@apm/api/store");
+
+const processed = await processQueuedDeliveries(getPool());
+console.log(`worker processed ${processed} queued deliveries`);
+await getPool().end();
