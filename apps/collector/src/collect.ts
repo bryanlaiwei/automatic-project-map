@@ -35,6 +35,15 @@ function resolveFolder(folder: string): string | null {
   }
 }
 
+function resolveSelectedRoots(roots: string[], resolvePaths: boolean): string[] {
+  if (!resolvePaths) {
+    return roots;
+  }
+  // On macOS /tmp is a symlink to /private/tmp. Resolve the selected roots
+  // the same way as the session folder, or a real match is rejected.
+  return roots.map((root) => resolveFolder(root) ?? root);
+}
+
 export function eventsFromParsedSession(input: {
   agent: AgentId;
   parsed: ParsedSession;
@@ -61,11 +70,12 @@ export function eventsFromParsedSession(input: {
     return { eligible: false, reason: "missing_folder", events: [] };
   }
 
+  const selectedRoots = resolveSelectedRoots(input.selectedRoots, input.resolvePaths);
   const decision = evaluateSessionEligibility({
     createdAt: input.parsed.createdAt,
     trackingStartedAt: input.trackingStartedAt,
     workingFolder,
-    selectedRoots: input.selectedRoots,
+    selectedRoots,
   });
 
   if (!decision.eligible) {
@@ -92,7 +102,7 @@ export function eventsFromParsedSession(input: {
         sessionId,
         createdAt,
         workingFolder,
-        selectedRoots: input.selectedRoots,
+        selectedRoots,
         sourceVersion: input.parsed.sourceVersion,
         records: input.parsed.records,
       },
@@ -142,7 +152,7 @@ export function loadIngestedSession(input: {
     sessionId: parsed.sessionId,
     createdAt: parsed.createdAt,
     workingFolder,
-    selectedRoots: input.selectedRoots,
+    selectedRoots: resolveSelectedRoots(input.selectedRoots, true),
     sourceVersion: parsed.sourceVersion,
     records: parsed.records,
   });

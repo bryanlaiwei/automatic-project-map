@@ -414,6 +414,9 @@ describe("day 1 intake", () => {
       await client.query(
         "grant select, insert, update, delete on all tables in schema public to rls_probe",
       );
+      // Local Supabase connects as postgres, which is not a superuser. SET ROLE
+      // is allowed only for roles this user belongs to.
+      await client.query("grant rls_probe to current_user");
       await client.query("set local role rls_probe");
       const visible = await client.query<{ count: number }>("select count(*)::int as count from projects");
       expect(visible.rows[0]?.count).toBe(0);

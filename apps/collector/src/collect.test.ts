@@ -1,12 +1,12 @@
 import { describe, expect, it } from "vitest";
-import { mkdtempSync, writeFileSync } from "node:fs";
+import { mkdtempSync, realpathSync, symlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { parseClaudeCodeSession } from "./adapters/claude-code.js";
 import { parseCodexSession, parseJsonLines } from "./adapters/codex.js";
 import { parseCursorSession } from "./adapters/cursor.js";
-import { eventsFromParsedSession } from "./collect.js";
+import { collectSession, eventsFromParsedSession } from "./collect.js";
 
 const fixtures = join(dirname(fileURLToPath(import.meta.url)), "../fixtures");
 const projectId = "22222222-2222-4222-8222-222222222222";
@@ -59,6 +59,31 @@ describe("session samples", () => {
     const result = collect("cursor", parsed, ["/Projects/my-app"]);
     expect(result.eligible).toBe(true);
     expect(result.events[0]?.source).toBe("cursor");
+  });
+
+  it("matches a selected root when the session folder is reached through a symlink", () => {
+    const real = realpathSync(mkdtempSync(join(tmpdir(), "apm-real-")));
+    const linkParent = realpathSync(mkdtempSync(join(tmpdir(), "apm-link-")));
+    const link = join(linkParent, "alias");
+    symlinkSync(real, link);
+    const createdAt = "2026-09-24T18:00:00.000Z";
+    const filePath = join(real, "session.jsonl");
+    writeFileSync(
+      filePath,
+      `${JSON.stringify({
+        timestamp: createdAt,
+        type: "session_meta",
+        payload: { id: "symlink-session", timestamp: createdAt, cwd: link, cli_version: "0.130.0" },
+      })}\n`,
+    );
+    const result = collectSession({
+      agent: "codex",
+      filePath,
+      projectId,
+      trackingStartedAt,
+      selectedRoots: [link],
+    });
+    expect(result).toMatchObject({ eligible: true, reason: null });
   });
 
   it("excludes a session created before tracking and a nonmatching folder", () => {
