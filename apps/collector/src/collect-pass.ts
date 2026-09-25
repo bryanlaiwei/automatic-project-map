@@ -11,6 +11,7 @@ import {
 import { parseClaudeCodeText } from "./adapters/claude-code.js";
 import { parseCodexText } from "./adapters/codex.js";
 import { parseCursorText } from "./adapters/cursor.js";
+import type { ChangeTracker } from "./change-tracker.js";
 import { completePrefixEnd, fileGeneration } from "./lines.js";
 import { LocalDb, type SessionCheckpoint } from "./local-db.js";
 import type { ParsedSession } from "./types.js";
@@ -25,7 +26,17 @@ export type CollectPassInput = {
   trackingStartedAt: string;
   selectedRoots: string[];
   logRoots: LogRoots;
+  changes?: ChangeTracker;
 };
+
+/** Keeps every content event well under the API's per-request body limit. */
+export const contentEventLimits = {
+  messages: 200,
+  bytes: 256 * 1024,
+  messageChars: 32 * 1024,
+};
+
+const shortenedMarker = "\n[message shortened by the local helper]";
 
 export type CollectPassResult = {
   queuedEventIds: string[];
@@ -199,33 +210,63 @@ function buildEvents(input: {
       }),
     );
   }
-  const first = input.records[0];
-  if (!first) {
-    return events;
+  for (const records of contentGroups(input.records)) {
+    const first = records[0];
+    if (!first) {
+      continue;
+    }
+    const contentId = sessionContentEventId(input.agent, input.sessionId, records);
+    events.push(
+      normalizedEventSchema.parse({
+        schemaVersion: SCHEMA_VERSION,
+        eventId: contentId,
+        sourceKey: contentId,
+        projectId: input.projectId,
+        source: input.agent,
+        occurredAt: first.occurredAt,
+        details: {
+          kind: "session.content_added",
+          sessionId: input.sessionId,
+          createdAt: input.createdAt,
+          sourceVersion: input.sourceVersion,
+          recordIds: records.map((record) => record.id),
+          messages: records,
+        },
+      }),
+    );
   }
-  const contentId = sessionContentEventId(input.agent, input.sessionId, input.records);
-  events.push(
-    normalizedEventSchema.parse({
-      schemaVersion: SCHEMA_VERSION,
-      eventId: contentId,
-      sourceKey: contentId,
-      projectId: input.projectId,
-      source: input.agent,
-      occurredAt: first.occurredAt,
-      details: {
-        kind: "session.content_added",
-        sessionId: input.sessionId,
-        createdAt: input.createdAt,
-        sourceVersion: input.sourceVersion,
-        recordIds: input.records.map((record) => record.id),
-        messages: input.records,
-      },
-    }),
-  );
   return events;
 }
 
-function discover(agent: AgentId, root: string): Discovered[] {
+export function contentGroups(records: readonly SessionMessage[]): SessionMessage[][] {
+  const groups: SessionMessage[][] = [];
+  let current: SessionMessage[] = [];
+  let bytes = 0;
+  for (const record of records) {
+    const message = shortenMessage(record);
+    const size = Buffer.byteLength(JSON.stringify(message));
+    if (current.length > 0 && (current.length >= contentEventLimits.messages || bytes + size > contentEventLimits.bytes)) {
+      groups.push(current);
+      current = [];
+      bytes = 0;
+    }
+    current.push(message);
+    bytes += size;
+  }
+  if (current.length > 0) {
+    groups.push(current);
+  }
+  return groups;
+}
+
+function shortenMessage(record: SessionMessage): SessionMessage {
+  if (record.text.length <= contentEventLimits.messageChars) {
+    return record;
+  }
+  return { ...record, text: record.text.slice(0, contentEventLimits.messageChars - shortenedMarker.length) + shortenedMarker };
+}
+
+function discover(agent: AgentId, root: string, changes: ChangeTracker | undefined): Discovered[] {
   let stat: ReturnType<typeof statSync>;
   try {
     stat = statSync(root);
@@ -243,6 +284,9 @@ function discover(agent: AgentId, root: string): Discovered[] {
       if (!exists(sessionPath) || !exists(transcriptPath)) {
         continue;
       }
+      if (changes?.unchanged([sessionPath, transcriptPath])) {
+        continue;
+      }
       const source = safely(() => readCursor(directory, sessionPath, transcriptPath));
       if (source) {
         found.push(source);
@@ -251,6 +295,9 @@ function discover(agent: AgentId, root: string): Discovered[] {
     return found;
   }
   for (const filePath of walkFiles(root, ".jsonl")) {
+    if (changes?.unchanged([filePath])) {
+      continue;
+    }
     const source = safely(() => (agent === "codex" ? readCodex(filePath) : readClaude(filePath)));
     if (source) {
       found.push(source);
@@ -406,7 +453,7 @@ export function prepareIncremental(input: CollectPassInput): CollectPassResult {
     if (!root) {
       continue;
     }
-    const found = discover(agent, root);
+    const found = discover(agent, root, input.changes);
     input.db.noteDiscovery(agent, String(found.length), adapterVersion);
     for (const source of found) {
       const sessionId = source.parsed.sessionId;

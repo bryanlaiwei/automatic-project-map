@@ -14,6 +14,7 @@ export type StoredEvent = {
 };
 
 const apiUrl = import.meta.env.VITE_API_URL || "http://127.0.0.1:4000";
+export const helperUrl = import.meta.env.VITE_HELPER_URL || "http://127.0.0.1:47321";
 
 async function request<T>(path: string, token: string, init?: RequestInit): Promise<T> {
   const response = await fetch(`${apiUrl}${path}`, {
@@ -55,4 +56,21 @@ export function createPairingCode(
   projectId: string,
 ): Promise<{ code: string; expiresAt: string }> {
   return request(`/projects/${projectId}/collector/pairing-codes`, token, { method: "POST" });
+}
+
+/** Hands a fresh pairing code to the helper running on this computer. */
+export async function pairLocalHelper(code: string): Promise<void> {
+  const response = await fetch(`${helperUrl}/pair`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ code, apiUrl }),
+  });
+  if (!response.ok) {
+    const body: unknown = await response.json().catch(() => null);
+    const message =
+      typeof body === "object" && body !== null && "error" in body && typeof body.error === "string"
+        ? body.error
+        : `The local helper refused the pairing (${response.status}).`;
+    throw new Error(message);
+  }
 }

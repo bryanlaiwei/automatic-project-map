@@ -6,6 +6,7 @@ import {
   splitSessionBytes,
 } from "@apm/shared";
 import { collectSession, loadIngestedSession, type AgentId } from "./collect.js";
+import { CollectorLoop, defaultLogRoots, defaultScanIntervalMs, describeLogRoots } from "./collector-loop.js";
 import { startLocalServer } from "./local-server.js";
 import { LocalDb } from "./local-db.js";
 import {
@@ -44,14 +45,26 @@ export async function runCli(
     const port = Number(env.APM_COLLECTOR_PORT ?? 47321);
     const dbPath = env.APM_COLLECTOR_DB ?? "collector.sqlite";
     const db = new LocalDb(dbPath);
+    const logRoots = defaultLogRoots(env);
+    const loop = new CollectorLoop({
+      db,
+      logRoots,
+      scanIntervalMs: Number(env.APM_SCAN_INTERVAL_MS ?? defaultScanIntervalMs),
+      log: (line) => io.log(redact(line, token)),
+    });
     const server = await startLocalServer({
       db,
       port,
       webOrigin: env.WEB_ORIGIN ?? "http://127.0.0.1:5173",
+      logRoots,
+      status: () => loop.status(),
+      scanNow: () => loop.tick(),
     });
+    loop.start();
     const address = server.address();
     const bound = address && typeof address !== "string" ? address.port : port;
     io.log(`helper listening on http://127.0.0.1:${bound}`);
+    io.log(`watching agent logs: ${describeLogRoots(logRoots).join(", ")}`);
     return { exitCode: 0 };
   }
   if (argv[0] !== "upload") {

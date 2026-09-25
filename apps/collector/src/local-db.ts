@@ -294,7 +294,7 @@ export class LocalDb {
       .prepare(
         `select event_id as eventId, project_id as projectId, provider, session_id as sessionId,
                 event_json as eventJson, attempt_count as attemptCount, queued_at as queuedAt
-         from outbox order by queued_at, event_id`,
+         from outbox order by queued_at, rowid`,
       )
       .all() as Array<{
       eventId: string;
@@ -324,6 +324,24 @@ export class LocalDb {
       }
     });
     run();
+  }
+
+  discard(eventIds: string[]): void {
+    this.acknowledge(eventIds);
+  }
+
+  dropOtherProjects(projectId: string): number {
+    return this.db.prepare("delete from outbox where project_id <> ?").run(projectId).changes;
+  }
+
+  pausedSessions(projectId: string): Array<{ provider: string; sessionId: string; reason: string | null }> {
+    return this.db
+      .prepare(
+        `select provider, session_id as sessionId, pause_reason as reason
+         from session_checkpoints where project_id = ? and paused = 1
+         order by provider, session_id`,
+      )
+      .all(projectId) as Array<{ provider: string; sessionId: string; reason: string | null }>;
   }
 
   recordFailure(eventIds: string[], message: string): void {
