@@ -110,3 +110,21 @@ npm run eval -w @apm/api
 ```
 
 It feeds sample sessions from all three agents and a few pull requests into a temporary project, prints the resulting map, and reports how many pairs of related evidence ended up together and how many unrelated pairs stayed apart. The project is deleted afterwards unless you pass `-- --keep`. `OPENAI_MODEL` defaults to `gpt-5-mini`.
+
+Day 4 is the web app at `http://127.0.0.1:5173`.
+
+- **Sign in and connect.** Sign in with GitHub, then enter the repository as `owner/name` or paste its URL. The API asks the GitHub App for the repository id, so you no longer type it. If you were invited, the invitation shows up there with a Join button.
+- **The map.** Each feature is a card with a bar showing how many of its work items are in each state, a line like "1 in progress · 1 in review · 1 merged", a blocked count when something is blocked, and the agents and people who worked on it. An arrow between two cards means work in one waits for work in the other; hover it to see which. Click a card to expand it in place and list its work items. Click a work item to open its details on the right.
+- **Details.** A work item shows where its state comes from (for example "From GitHub: a pull request is open and ready for review"), its pull requests with review decisions and CI results including earlier failed attempts, its dependencies, the session excerpts and pull request descriptions linked to it, contributors, and a readable history that says whether GitHub, the AI or a named person made each change.
+- **Corrections.** Click a title to rename it. The `…` menu moves a work item to another feature, merges it into another item, or splits pull requests and excerpts into a new item; features can be merged too. Hover a dependency and click × to remove it. Each correction is saved as that person's decision.
+- **Layout.** Positions are shared by everyone on the project and saved separately from the map, so moving a card never changes the map revision. New features take the next free spot and existing cards stay where they are. Drag cards to rearrange them; a card dropped on another moves down to the nearest free spot. The grid button in the bottom-left corner re-arranges everything, with prerequisites to the left of the work that waits for them.
+- **Refresh.** The page checks the map revision every 15 seconds and when the window regains focus, and reloads the map and any open details when it changed. A small notice at the top says when updates are waiting for AI analysis, and turns amber when they have waited more than 3 minutes.
+- **Settings.** General shows the repository and tracking start, and lets an owner delete the project (type its name to confirm). Members lets an owner invite a GitHub username, revoke open invitations and remove people; members can leave. Removing someone also disconnects the helpers they paired. Local helper shows whether the helper on this computer is running and connected, connects it in one click, links to its folder page, and lists every connected helper with its last upload. Health shows the last GitHub webhook, the last session activity, and whether AI analysis is waiting or failing.
+
+To look around without an OpenAI key, create a sample project for your account. Sign in once first, then run:
+
+```bash
+npm run demo:seed -w @apm/api -- your-github-username
+```
+
+It adds `demo/shop-app` to the repository menu. Its sample sessions, pull requests, reviews and CI runs go through the same processing as real data, with a scripted stand-in for the model. Run it again to rebuild it, or add `--remove` to delete it.

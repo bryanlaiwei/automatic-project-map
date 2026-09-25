@@ -342,7 +342,7 @@ describe("Day 3 interpretation and map maintenance", () => {
     expect(inReview.items[0]).toMatchObject({ id: workItemId, state: "in_review", stateBasis: "observed" });
 
     const detail = await readWorkItem(pool, project.id, workItemId);
-    expect(detail?.contributors).toEqual(["Claude Code", "Codex", "alice"]);
+    expect(detail?.contributors).toEqual({ agents: ["claude_code", "codex"], people: ["alice"] });
     expect(detail?.pullRequests.map((pull) => pull.number)).toEqual([7]);
     expect(detail?.evidence).toHaveLength(3);
 
@@ -727,7 +727,7 @@ describe("Day 3 interpretation and map maintenance", () => {
     const body = (await graph.json()) as { revision: number; features: Array<{ id: string; counts: Record<string, number>; workItems: Array<{ id: string }> }> };
     expect(body.features[0]?.counts).toEqual({ in_progress: 1 });
     const revision = await api(project, "/graph/revision");
-    expect(await revision.json()).toEqual({ revision: body.revision, pendingAnalysis: 0 });
+    expect(await revision.json()).toEqual({ revision: body.revision, pendingAnalysis: 0, pendingSince: null });
     const featureId = body.features[0]?.id ?? "";
     const workItemId = body.features[0]?.workItems[0]?.id ?? "";
     expect((await api(project, `/features/${featureId}`)).status).toBe(200);

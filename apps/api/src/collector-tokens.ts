@@ -36,8 +36,8 @@ export async function exchangePairingCode(
   const client = await pool.connect();
   try {
     await client.query("begin");
-    const found = await client.query<{ project_id: string; tracking_started_at: Date }>(
-      `select c.project_id, p.tracking_started_at
+    const found = await client.query<{ project_id: string; user_id: string; tracking_started_at: Date }>(
+      `select c.project_id, c.user_id, p.tracking_started_at
        from collector_pairing_codes c
        join projects p on p.id = c.project_id
        where c.code_hash = $1 and c.used_at is null and c.expires_at > $2
@@ -55,10 +55,10 @@ export async function exchangePairingCode(
     ]);
     const token = `apm_${randomBytes(32).toString("base64url")}`;
     const inserted = await client.query<{ id: string }>(
-      `insert into collector_tokens (project_id, label, token_hash)
-       values ($1, $2, $3)
+      `insert into collector_tokens (project_id, label, token_hash, user_id)
+       values ($1, $2, $3, $4)
        returning id`,
-      [row.project_id, input.label?.trim() || "local helper", hashCollectorSecret(token)],
+      [row.project_id, input.label?.trim() || "local helper", hashCollectorSecret(token), row.user_id],
     );
     const id = inserted.rows[0]?.id;
     if (!id) {
@@ -81,15 +81,20 @@ export async function exchangePairingCode(
   }
 }
 
+/** Finds the device behind a token and records that it was seen, for the Settings device list. */
 export async function findCollectorDevice(pool: Pool, token: string): Promise<CollectorDevice | null> {
   if (token.trim() === "") {
     return null;
   }
   const result = await pool.query<{ id: string; project_id: string; tracking_started_at: Date }>(
-    `select t.id, t.project_id, p.tracking_started_at
-     from collector_tokens t
-     join projects p on p.id = t.project_id
-     where t.token_hash = $1 and t.revoked_at is null`,
+    `with seen as (
+       update collector_tokens set last_seen_at = now()
+       where token_hash = $1 and revoked_at is null
+       returning id, project_id
+     )
+     select seen.id, seen.project_id, p.tracking_started_at
+     from seen
+     join projects p on p.id = seen.project_id`,
     [hashCollectorSecret(token)],
   );
   const row = result.rows[0];

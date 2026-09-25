@@ -25,7 +25,7 @@ export function graphRouter(input: { pool: Pool; access: ProjectAccess }): Route
     if (!allowed) {
       return;
     }
-    res.json({ revision: await readRevision(pool, allowed.projectId), pendingAnalysis: await pendingAnalysis(pool, allowed.projectId) });
+    res.json({ revision: await readRevision(pool, allowed.projectId), ...(await pendingAnalysis(pool, allowed.projectId)) });
   });
 
   router.get("/projects/:projectId/work-items/:workItemId", async (req, res) => {
