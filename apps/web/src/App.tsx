@@ -1,5 +1,5 @@
 import { useEffect, useState, type FormEvent } from "react";
-import { connectProject, fetchEvents, fetchProjects, type Project, type StoredEvent } from "./api";
+import { connectProject, createPairingCode, fetchEvents, fetchProjects, type Project, type StoredEvent } from "./api";
 import { supabase, type Session } from "./supabase";
 
 function App() {
@@ -11,6 +11,7 @@ function App() {
   const [owner, setOwner] = useState("");
   const [name, setName] = useState("");
   const [repoId, setRepoId] = useState("");
+  const [pairingCode, setPairingCode] = useState<string | null>(null);
 
   useEffect(() => {
     if (!supabase) {
@@ -120,6 +121,29 @@ function App() {
                 {project.owner}/{project.name}
               </h2>
               <p>Tracking started {project.trackingStartedAt}</p>
+              <h3>Local helper</h3>
+              <p>Start the helper, then pair it with a code from this signed-in browser. Folder selection stays on the helper.</p>
+              <button
+                type="button"
+                onClick={() => {
+                  const token = session.access_token;
+                  void createPairingCode(token, project.id)
+                    .then((body) => {
+                      setPairingCode(body.code);
+                      setError(null);
+                    })
+                    .catch((reason: unknown) => {
+                      setError(reason instanceof Error ? reason.message : "Could not create a pairing code.");
+                    });
+                }}
+              >
+                Create pairing code
+              </button>
+              {pairingCode ? (
+                <p>
+                  Pairing code: <code>{pairingCode}</code>
+                </p>
+              ) : null}
               <h3>Events</h3>
               {events.length === 0 ? (
                 <p>No events yet. GitHub webhooks and eligible local sessions will appear here.</p>

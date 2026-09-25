@@ -49,3 +49,10 @@ export function connectProject(
 export function fetchEvents(token: string, projectId: string): Promise<{ events: StoredEvent[] }> {
   return request(`/projects/${projectId}/events`, token);
 }
+
+export function createPairingCode(
+  token: string,
+  projectId: string,
+): Promise<{ code: string; expiresAt: string }> {
+  return request(`/projects/${projectId}/collector/pairing-codes`, token, { method: "POST" });
+}

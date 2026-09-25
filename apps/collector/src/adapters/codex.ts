@@ -54,7 +54,11 @@ export function parseJsonLines(text: string): JsonRecord[] {
 }
 
 export function parseCodexSession(filePath: string): ParsedSession {
-  const lines = readJsonLines(filePath);
+  return parseCodexText(readFileSync(filePath, "utf8"));
+}
+
+export function parseCodexText(text: string): ParsedSession {
+  const lines = parseJsonLines(text);
   let sessionId: string | null = null;
   let createdAt: string | null = null;
   let workingFolder: string | null = null;

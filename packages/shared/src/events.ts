@@ -8,6 +8,16 @@ export type EventSource = z.infer<typeof eventSourceSchema>;
 
 const isoTime = z.string().datetime();
 
+export const prCommitSchema = z.object({
+  sha: z.string().min(1),
+  message: z.string(),
+});
+
+export const prFileSchema = z.object({
+  filename: z.string().min(1),
+  status: z.string().min(1),
+});
+
 export const prUpdatedDetailsSchema = z.object({
   kind: z.literal("pr.updated"),
   repositoryId: z.number().int(),
@@ -21,6 +31,8 @@ export const prUpdatedDetailsSchema = z.object({
   merged: z.boolean(),
   headSha: z.string().min(1),
   updatedAt: isoTime,
+  commits: z.array(prCommitSchema).optional(),
+  files: z.array(prFileSchema).optional(),
 });
 
 export const prReviewedDetailsSchema = z.object({
@@ -31,6 +43,14 @@ export const prReviewedDetailsSchema = z.object({
   reviewer: z.string().min(1),
   decision: z.string().min(1),
   submittedAt: isoTime,
+});
+
+export const workflowJobSummarySchema = z.object({
+  jobId: z.number().int(),
+  name: z.string(),
+  status: z.string().min(1),
+  conclusion: z.string().nullable(),
+  attempt: z.number().int(),
 });
 
 export const workflowUpdatedDetailsSchema = z.object({
@@ -44,6 +64,7 @@ export const workflowUpdatedDetailsSchema = z.object({
   headSha: z.string().min(1),
   pullRequestNumbers: z.array(z.number().int()),
   url: z.string().url(),
+  jobs: z.array(workflowJobSummarySchema).optional(),
 });
 
 export const sessionStartedDetailsSchema = z.object({

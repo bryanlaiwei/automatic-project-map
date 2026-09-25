@@ -6,6 +6,8 @@ import {
   splitSessionBytes,
 } from "@apm/shared";
 import { collectSession, loadIngestedSession, type AgentId } from "./collect.js";
+import { startLocalServer } from "./local-server.js";
+import { LocalDb } from "./local-db.js";
 import {
   createFetchSessionUploadTransport,
   uploadSessionChunks,
@@ -38,6 +40,20 @@ export async function runCli(
   fetchImpl?: typeof fetch,
 ): Promise<CliResult> {
   const token = env.APM_ACCESS_TOKEN?.trim() ?? "";
+  if (argv[0] === "serve") {
+    const port = Number(env.APM_COLLECTOR_PORT ?? 47321);
+    const dbPath = env.APM_COLLECTOR_DB ?? "collector.sqlite";
+    const db = new LocalDb(dbPath);
+    const server = await startLocalServer({
+      db,
+      port,
+      webOrigin: env.WEB_ORIGIN ?? "http://127.0.0.1:5173",
+    });
+    const address = server.address();
+    const bound = address && typeof address !== "string" ? address.port : port;
+    io.log(`helper listening on http://127.0.0.1:${bound}`);
+    return { exitCode: 0 };
+  }
   if (argv[0] !== "upload") {
     return runParse(argv, io);
   }
