@@ -99,7 +99,8 @@ export async function listProjects(pool: Pool, userId: string): Promise<ProjectR
     `select p.*
      from projects p
      join memberships m on m.workspace_id = p.workspace_id
-     where m.user_id = $1`,
+     where m.user_id = $1
+     order by p.created_at, p.id`,
     [userId],
   );
   return result.rows;

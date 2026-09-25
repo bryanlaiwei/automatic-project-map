@@ -17,7 +17,8 @@
     "start": "tsx src/index.ts",
     "typecheck": "tsc --noEmit",
     "test": "vitest run",
-    "eval": "tsx src/graph/eval-grouping.ts"
+    "eval": "tsx src/graph/eval-grouping.ts",
+    "demo:seed": "tsx src/demo/seed-demo.ts"
   },
   "dependencies": {
     "@apm/shared": "*",

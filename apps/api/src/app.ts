@@ -7,6 +7,8 @@ import type { RepositoryAccessCheck } from "./github-app.js";
 import { verifyGithubSignature } from "./github.js";
 import { createPairingCode, exchangePairingCode, findCollectorDevice, revokeCollectorToken } from "./collector-tokens.js";
 import { graphRouter } from "./graph/routes.js";
+import { workspaceRouter } from "./workspace-routes.js";
+import { listProjectRoles, projectRole, type Role } from "./workspace.js";
 import { ingestEvents } from "./ingest-events.js";
 import { acceptSessionChunk, getSessionUpload, resetSessionUpload, type SessionUploadView } from "./session-uploads.js";
 import {
@@ -21,9 +23,9 @@ import {
 } from "./store.js";
 
 const connectBody = z.object({
-  owner: z.string().min(1),
-  name: z.string().min(1),
-  repoId: z.number().int().positive(),
+  owner: z.string().trim().min(1),
+  name: z.string().trim().min(1),
+  repoId: z.number().int().positive().optional(),
 });
 
 const chunkBody = z.object({
@@ -76,6 +78,26 @@ async function requireUser(deps: AppDeps, req: Request, res: Response): Promise<
   return user;
 }
 
+async function projectMember(
+  deps: AppDeps,
+  req: Request,
+  res: Response,
+): Promise<{ user: AuthUser; userId: string; projectId: string; role: Role } | null> {
+  const user = await requireUser(deps, req, res);
+  if (!user) {
+    return null;
+  }
+  const projectId = req.params.projectId;
+  const role = typeof projectId === "string" && uuidPattern.test(projectId) ? await projectRole(deps.pool, user.id, projectId) : null;
+  if (typeof projectId !== "string" || !role) {
+    res.status(404).json({ error: "Project not found." });
+    return null;
+  }
+  return { user, userId: user.id, projectId, role };
+}
+
+const uuidPattern = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+
 export function createApp(deps: AppDeps) {
   if (deps.webhookSecret.trim() === "") {
     throw new Error(
@@ -96,7 +118,7 @@ export function createApp(deps: AppDeps) {
       res.setHeader("Access-Control-Allow-Origin", requestOrigin);
     }
     res.setHeader("Access-Control-Allow-Headers", "Authorization, Content-Type");
-    res.setHeader("Access-Control-Allow-Methods", "GET, POST, DELETE, OPTIONS");
+    res.setHeader("Access-Control-Allow-Methods", "GET, POST, PUT, DELETE, OPTIONS");
     if (req.method === "OPTIONS") {
       res.status(204).end();
       return;
@@ -166,7 +188,7 @@ export function createApp(deps: AppDeps) {
     }
     const parsed = connectBody.safeParse(req.body);
     if (!parsed.success) {
-      res.status(400).json({ error: "Repository owner, name, and numeric id are required." });
+      res.status(400).json({ error: "Enter the repository as owner/name." });
       return;
     }
     const access = await deps.verifyRepositoryAccess(parsed.data);
@@ -187,7 +209,12 @@ export function createApp(deps: AppDeps) {
         throw new Error(`Unexpected repository access result: ${JSON.stringify(unexpected)}`);
       }
     }
-    const result = await connectRepository(deps.pool, { userId: user.id, ...parsed.data });
+    const repoId = parsed.data.repoId ?? (access.status === "accessible" ? access.repoId : undefined);
+    if (repoId === undefined) {
+      res.status(400).json({ error: "GitHub did not return an id for this repository." });
+      return;
+    }
+    const result = await connectRepository(deps.pool, { userId: user.id, owner: parsed.data.owner, name: parsed.data.name, repoId });
     if ("error" in result) {
       const message =
         result.error === "repo_taken"
@@ -213,6 +240,7 @@ export function createApp(deps: AppDeps) {
       return;
     }
     const projects = await listProjects(deps.pool, user.id);
+    const roles = await listProjectRoles(deps.pool, user.id);
     res.json({
       projects: projects.map((project) => ({
         id: project.id,
@@ -220,6 +248,7 @@ export function createApp(deps: AppDeps) {
         name: project.github_name,
         repoId: Number(project.github_repo_id),
         trackingStartedAt: project.tracking_started_at.toISOString(),
+        role: roles.get(project.id) ?? "member",
       })),
     });
   });
@@ -238,21 +267,12 @@ export function createApp(deps: AppDeps) {
     res.json({ events });
   });
 
+  app.use(graphRouter({ pool: deps.pool, access: (req, res) => projectMember(deps, req, res) }));
   app.use(
-    graphRouter({
+    workspaceRouter({
       pool: deps.pool,
-      access: async (req, res) => {
-        const user = await requireUser(deps, req, res);
-        if (!user) {
-          return null;
-        }
-        const projectId = req.params.projectId;
-        if (typeof projectId !== "string" || !(await userCanAccessProject(deps.pool, user.id, projectId))) {
-          res.status(404).json({ error: "Project not found." });
-          return null;
-        }
-        return { userId: user.id, projectId };
-      },
+      authenticate: (req, res) => requireUser(deps, req, res),
+      member: (req, res) => projectMember(deps, req, res),
     }),
   );
 
