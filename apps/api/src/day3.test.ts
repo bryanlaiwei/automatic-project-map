@@ -342,7 +342,7 @@ describe("Day 3 interpretation and map maintenance", () => {
     expect(inReview.items[0]).toMatchObject({ id: workItemId, state: "in_review", stateBasis: "observed" });
 
     const detail = await readWorkItem(pool, project.id, workItemId);
-    expect(detail?.contributors).toEqual(["Claude Code", "Codex", "alice"]);
+    expect(detail?.contributors).toEqual({ agents: ["claude_code", "codex"], people: ["alice"] });
     expect(detail?.pullRequests.map((pull) => pull.number)).toEqual([7]);
     expect(detail?.evidence).toHaveLength(3);
 

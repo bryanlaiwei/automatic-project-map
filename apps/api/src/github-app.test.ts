@@ -35,7 +35,7 @@ describe("GitHub App repository check", () => {
     expect(called).toBe(false);
   });
 
-  it("accepts a repository only when the installation can see that numeric id", async () => {
+  it("accepts a repository only when the installation can see that numeric id, and reports the id when none is given", async () => {
     const seen: string[] = [];
     const check = createGithubRepositoryAccessCheck({
       appId: "12345",
@@ -59,8 +59,9 @@ describe("GitHub App repository check", () => {
       },
     });
 
-    await expect(check({ owner: "acme", name: "app", repoId: 99 })).resolves.toEqual({ status: "accessible" });
+    await expect(check({ owner: "acme", name: "app", repoId: 99 })).resolves.toEqual({ status: "accessible", repoId: 99 });
     await expect(check({ owner: "acme", name: "app", repoId: 100 })).resolves.toEqual({ status: "denied" });
+    await expect(check({ owner: "acme", name: "app" })).resolves.toEqual({ status: "accessible", repoId: 99 });
     expect(seen.some((call) => call.includes("/repos/acme/app/installation"))).toBe(true);
   });
 

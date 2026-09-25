@@ -1,15 +1,16 @@
 import { createSign } from "node:crypto";
 
 export type RepositoryAccess =
-  | { status: "accessible" }
+  | { status: "accessible"; repoId?: number }
   | { status: "denied" }
   | { status: "not_configured"; message: string }
   | { status: "unavailable"; message: string };
 
+/** Without a repoId, the check reports the id GitHub has for owner/name. */
 export type RepositoryAccessCheck = (input: {
   owner: string;
   name: string;
-  repoId: number;
+  repoId?: number | undefined;
 }) => Promise<RepositoryAccess>;
 
 const githubApi = "https://api.github.com";
@@ -71,10 +72,10 @@ export function createGithubRepositoryAccessCheck(input: {
         };
       }
       const confirmedId = readNumberId(repo.body);
-      if (confirmedId === null || confirmedId !== repoId) {
+      if (confirmedId === null || (repoId !== undefined && confirmedId !== repoId)) {
         return { status: "denied" };
       }
-      return { status: "accessible" };
+      return { status: "accessible", repoId: confirmedId };
     } catch (error) {
       const message = error instanceof Error ? error.message : "GitHub App authentication failed.";
       return { status: "unavailable", message };

@@ -1,7 +1,9 @@
 import type { Pool } from "pg";
 import { pullRequestStateSchema, workflowRunStateSchema } from "./artifact-state.js";
-import { sessionLabel } from "./context.js";
 import { workItemStates, type Basis, type WorkItemState } from "./state.js";
+
+/** Agents are source keys such as "codex"; people are GitHub logins of pull request authors. */
+export type Contributors = { agents: string[]; people: string[] };
 
 export type GraphView = {
   revision: number;
@@ -10,10 +12,21 @@ export type GraphView = {
     title: string;
     summary: string;
     counts: Partial<Record<WorkItemState, number>>;
-    workItems: Array<{ id: string; title: string; state: WorkItemState; stateBasis: Basis; blocked: boolean }>;
+    contributors: Contributors;
+    lastActivityAt: string | null;
+    workItems: Array<{
+      id: string;
+      title: string;
+      state: WorkItemState;
+      stateBasis: Basis;
+      blocked: boolean;
+      pullRequests: number[];
+      lastActivityAt: string | null;
+    }>;
   }>;
   relationships: Array<{ id: string; kind: "depends_on"; from: string; to: string; basis: Basis }>;
   pendingAnalysis: number;
+  pendingSince: string | null;
 };
 
 export async function readRevision(pool: Pool, projectId: string): Promise<number | null> {
@@ -33,10 +46,41 @@ export async function readGraph(pool: Pool, projectId: string): Promise<GraphVie
      order by created_at, id`,
     [projectId],
   );
-  const items = await pool.query<{ id: string; feature_id: string; title: string; state: WorkItemState; state_basis: Basis; blocked: boolean }>(
-    `select id, feature_id, title, state, state_basis, blocked from work_items
-     where project_id = $1 and retired_into is null
-     order by created_at, id`,
+  const items = await pool.query<{
+    id: string;
+    feature_id: string;
+    title: string;
+    state: WorkItemState;
+    state_basis: Basis;
+    blocked: boolean;
+    pulls: number[];
+    agents: string[];
+    people: string[];
+    last_activity: Date | null;
+  }>(
+    `select wi.id, wi.feature_id, wi.title, wi.state, wi.state_basis, wi.blocked,
+            coalesce(pr.pulls, '{}') as pulls,
+            coalesce(pr.people, '{}') as people,
+            coalesce(ev.agents, '{}') as agents,
+            greatest(pr.last_at, ev.last_at) as last_activity
+     from work_items wi
+     left join lateral (
+       select array_agg(a.number order by a.number) as pulls,
+              array_agg(distinct a.state->>'author') filter (where a.state->>'author' is not null) as people,
+              max(a.source_updated_at) as last_at
+       from work_item_artifacts wa
+       join artifacts a on a.id = wa.artifact_id
+       where wa.work_item_id = wi.id and a.kind = 'pull_request'
+     ) pr on true
+     left join lateral (
+       select array_agg(distinct e.source) filter (where e.kind = 'session_excerpt') as agents,
+              max(e.observed_at) as last_at
+       from work_item_evidence we
+       join evidence e on e.id = we.evidence_id
+       where we.work_item_id = wi.id
+     ) ev on true
+     where wi.project_id = $1 and wi.retired_into is null
+     order by wi.created_at, wi.id`,
     [projectId],
   );
   const relationships = await pool.query<{ id: string; from_work_item_id: string; to_work_item_id: string; basis: Basis }>(
@@ -47,17 +91,24 @@ export async function readGraph(pool: Pool, projectId: string): Promise<GraphVie
      order by r.created_at, r.id`,
     [projectId],
   );
-  const pending = await pool.query<{ count: string }>(
-    `select count(*) from evidence
+  const pending = await pool.query<{ count: string; since: Date | null }>(
+    `select count(*), min(created_at) as since from evidence
      where project_id = $1 and (interpretation_state = 'pending' or (interpretation_state = 'failed' and retry_at is not null))`,
     [projectId],
   );
   return {
     revision,
     features: features.rows.map((feature) => {
-      const workItems = items.rows
-        .filter((item) => item.feature_id === feature.id)
-        .map((item) => ({ id: item.id, title: item.title, state: item.state, stateBasis: item.state_basis, blocked: item.blocked }));
+      const rows = items.rows.filter((item) => item.feature_id === feature.id);
+      const workItems = rows.map((item) => ({
+        id: item.id,
+        title: item.title,
+        state: item.state,
+        stateBasis: item.state_basis,
+        blocked: item.blocked,
+        pullRequests: item.pulls,
+        lastActivityAt: item.last_activity?.toISOString() ?? null,
+      }));
       const counts: Partial<Record<WorkItemState, number>> = {};
       for (const state of workItemStates) {
         const count = workItems.filter((item) => item.state === state).length;
@@ -65,7 +116,19 @@ export async function readGraph(pool: Pool, projectId: string): Promise<GraphVie
           counts[state] = count;
         }
       }
-      return { id: feature.id, title: feature.title, summary: feature.summary, counts, workItems };
+      const activity = workItems.map((item) => item.lastActivityAt).filter((value): value is string => value !== null);
+      return {
+        id: feature.id,
+        title: feature.title,
+        summary: feature.summary,
+        counts,
+        contributors: {
+          agents: sortedUnique(rows.flatMap((item) => item.agents)),
+          people: sortedUnique(rows.flatMap((item) => item.people)),
+        },
+        lastActivityAt: activity.length > 0 ? activity.reduce((max, value) => (value > max ? value : max)) : null,
+        workItems,
+      };
     }),
     relationships: relationships.rows.map((row) => ({
       id: row.id,
@@ -75,7 +138,12 @@ export async function readGraph(pool: Pool, projectId: string): Promise<GraphVie
       basis: row.basis,
     })),
     pendingAnalysis: Number(pending.rows[0]?.count ?? 0),
+    pendingSince: pending.rows[0]?.since?.toISOString() ?? null,
   };
+}
+
+function sortedUnique(values: readonly string[]): string[] {
+  return [...new Set(values)].sort((a, b) => a.localeCompare(b));
 }
 
 async function resolve(pool: Pool, kind: "feature" | "work_item", id: string): Promise<string> {
@@ -87,10 +155,22 @@ async function resolve(pool: Pool, kind: "feature" | "work_item", id: string): P
 }
 
 async function history(pool: Pool, projectId: string, kind: "feature" | "work_item", id: string) {
-  const result = await pool.query<{ revision: string; change: string; before: unknown; after: unknown; basis: Basis; evidence_ids: string[]; created_at: Date }>(
-    `select revision, change, before, after, basis, evidence_ids, created_at from graph_changes
-     where project_id = $1 and entity_kind = $2 and entity_id = $3
-     order by id desc
+  const result = await pool.query<{
+    revision: string;
+    change: string;
+    before: unknown;
+    after: unknown;
+    basis: Basis;
+    evidence_ids: string[];
+    created_at: Date;
+    actor: string | null;
+  }>(
+    `select g.revision, g.change, g.before, g.after, g.basis, g.evidence_ids, g.created_at, p.github_login as actor
+     from graph_changes g
+     left join corrections c on c.id = g.correction_id
+     left join profiles p on p.user_id = c.user_id
+     where g.project_id = $1 and g.entity_kind = $2 and g.entity_id = $3
+     order by g.id desc
      limit 100`,
     [projectId, kind, id],
   );
@@ -101,6 +181,7 @@ async function history(pool: Pool, projectId: string, kind: "feature" | "work_it
     after: row.after,
     basis: row.basis,
     evidenceIds: row.evidence_ids,
+    actor: row.actor,
     at: row.created_at.toISOString(),
   }));
 }
@@ -175,17 +256,10 @@ export async function readWorkItem(pool: Pool, projectId: string, requestedId: s
     [id],
   );
 
-  const contributors = new Set<string>();
-  for (const pull of pullStates) {
-    if (pull.state.author) {
-      contributors.add(pull.state.author);
-    }
-  }
-  for (const row of evidence.rows) {
-    if (row.kind === "session_excerpt") {
-      contributors.add(agentName(row.source));
-    }
-  }
+  const contributors: Contributors = {
+    agents: sortedUnique(evidence.rows.filter((row) => row.kind === "session_excerpt").map((row) => row.source)),
+    people: sortedUnique(pullStates.flatMap((pull) => (pull.state.author ? [pull.state.author] : []))),
+  };
 
   return {
     id: item.id,
@@ -195,7 +269,7 @@ export async function readWorkItem(pool: Pool, projectId: string, requestedId: s
     summary: { value: item.summary, basis: item.summary_basis },
     state: { value: item.state, basis: item.state_basis },
     blocked: item.blocked ? { reason: item.blocked_reason } : null,
-    contributors: [...contributors].sort(),
+    contributors,
     pullRequests: pullStates.map(({ row, state }) => ({
       artifactId: row.id,
       number: state.number,
@@ -224,7 +298,7 @@ export async function readWorkItem(pool: Pool, projectId: string, requestedId: s
       id: row.id,
       kind: row.kind,
       source: row.source,
-      session: row.session_id ? sessionLabel(row.source, row.session_id) : null,
+      sessionId: row.session_id,
       excerpt: row.excerpt,
       observedAt: row.observed_at.toISOString(),
       basis: row.basis,
@@ -259,14 +333,16 @@ export async function readFeature(pool: Pool, projectId: string, requestedId: st
      order by created_at, id`,
     [id],
   );
-  const contributors = await pool.query<{ name: string }>(
+  const people = await pool.query<{ name: string }>(
     `select distinct a.state->>'author' as name
      from work_items wi
      join work_item_artifacts wa on wa.work_item_id = wi.id
      join artifacts a on a.id = wa.artifact_id
-     where wi.feature_id = $1 and wi.retired_into is null and a.state->>'author' is not null
-     union
-     select distinct e.source as name
+     where wi.feature_id = $1 and wi.retired_into is null and a.state->>'author' is not null`,
+    [id],
+  );
+  const agents = await pool.query<{ name: string }>(
+    `select distinct e.source as name
      from work_items wi
      join work_item_evidence we on we.work_item_id = wi.id
      join evidence e on e.id = we.evidence_id
@@ -286,20 +362,10 @@ export async function readFeature(pool: Pool, projectId: string, requestedId: st
       stateBasis: item.state_basis,
       blocked: item.blocked,
     })),
-    contributors: contributors.rows.map((entry) => agentName(entry.name)).sort(),
+    contributors: {
+      agents: sortedUnique(agents.rows.map((row) => row.name)),
+      people: sortedUnique(people.rows.map((row) => row.name)),
+    },
     history: await history(pool, projectId, "feature", id),
   };
-}
-
-function agentName(source: string): string {
-  switch (source) {
-    case "codex":
-      return "Codex";
-    case "claude_code":
-      return "Claude Code";
-    case "cursor":
-      return "Cursor";
-    default:
-      return source;
-  }
 }
