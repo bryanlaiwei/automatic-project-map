@@ -5,6 +5,8 @@ import { SCHEMA_VERSION, SESSION_CHUNK_REQUEST_LIMIT_BYTES, sessionAgentSchema }
 import type { AuthUser } from "./auth.js";
 import type { RepositoryAccessCheck } from "./github-app.js";
 import { verifyGithubSignature } from "./github.js";
+import { createPairingCode, exchangePairingCode, findCollectorDevice, revokeCollectorToken } from "./collector-tokens.js";
+import { ingestEvents } from "./ingest-events.js";
 import { acceptSessionChunk, getSessionUpload, resetSessionUpload, type SessionUploadView } from "./session-uploads.js";
 import {
   connectRepository,
@@ -14,6 +16,7 @@ import {
   listProjects,
   processQueuedDeliveries,
   userCanAccessProject,
+  type GithubLookup,
 } from "./store.js";
 
 const connectBody = z.object({
@@ -45,7 +48,18 @@ export type AppDeps = {
   webhookSecret: string;
   verifyUser: (token: string) => Promise<AuthUser | null>;
   verifyRepositoryAccess: RepositoryAccessCheck;
+  github?: GithubLookup;
 };
+
+const ingestBody = z.object({
+  projectId: z.string().uuid(),
+  events: z.array(z.unknown()).max(100),
+});
+
+const pairBody = z.object({
+  code: z.string().min(1),
+  label: z.string().max(80).optional(),
+});
 
 function bearerToken(req: Request): string {
   const header = req.header("authorization") ?? "";
@@ -138,7 +152,7 @@ export function createApp(deps: AppDeps) {
       res.status(202).json({ accepted: true, duplicate: true });
       return;
     }
-    await processQueuedDeliveries(deps.pool);
+    await processQueuedDeliveries(deps.pool, deps.github);
     res.status(202).json({ accepted: true, duplicate: false });
   });
 
@@ -276,6 +290,71 @@ export function createApp(deps: AppDeps) {
     res.status(204).end();
   });
 
+  app.post("/projects/:projectId/collector/pairing-codes", async (req, res) => {
+    const user = await requireUser(deps, req, res);
+    if (!user) {
+      return;
+    }
+    const projectId = req.params.projectId;
+    if (typeof projectId !== "string" || !(await userCanAccessProject(deps.pool, user.id, projectId))) {
+      res.status(404).json({ error: "Project not found." });
+      return;
+    }
+    const pairing = await createPairingCode(deps.pool, { projectId, userId: user.id });
+    res.status(201).json(pairing);
+  });
+
+  app.post("/collector/pair", async (req, res) => {
+    const parsed = pairBody.safeParse(req.body);
+    if (!parsed.success) {
+      res.status(400).json({ error: "A pairing code is required." });
+      return;
+    }
+    const exchanged = await exchangePairingCode(deps.pool, {
+      code: parsed.data.code,
+      ...(parsed.data.label !== undefined ? { label: parsed.data.label } : {}),
+    });
+    if ("error" in exchanged) {
+      res.status(401).json({ error: "That pairing code is invalid, expired, or already used." });
+      return;
+    }
+    res.status(201).json({
+      token: exchanged.token,
+      deviceId: exchanged.device.id,
+      projectId: exchanged.device.projectId,
+      trackingStartedAt: exchanged.device.trackingStartedAt,
+    });
+  });
+
+  app.delete("/collector/token", async (req, res) => {
+    const device = await findCollectorDevice(deps.pool, bearerToken(req));
+    if (!device) {
+      res.status(401).json({ error: "Collector token is missing or revoked." });
+      return;
+    }
+    await revokeCollectorToken(deps.pool, bearerToken(req));
+    res.status(204).end();
+  });
+
+  app.post("/ingest/events", async (req, res) => {
+    const parsed = ingestBody.safeParse(req.body);
+    if (!parsed.success) {
+      res.status(400).json({ error: "Event batch is invalid." });
+      return;
+    }
+    const allowed = await canIngest(deps, req, parsed.data.projectId);
+    if (allowed === "unauthorized") {
+      res.status(401).json({ error: "Sign in or a collector token is required." });
+      return;
+    }
+    if (allowed === "forbidden") {
+      res.status(404).json({ error: "Project not found." });
+      return;
+    }
+    const result = await ingestEvents(deps.pool, parsed.data);
+    res.status(202).json(result);
+  });
+
   app.post("/ingest/sessions/chunks", async (req, res) => {
     const user = await requireUser(deps, req, res);
     if (!user) {
@@ -320,6 +399,26 @@ export function createApp(deps: AppDeps) {
   });
 
   return app;
+}
+
+async function canIngest(
+  deps: AppDeps,
+  req: Request,
+  projectId: string,
+): Promise<"ok" | "unauthorized" | "forbidden"> {
+  const token = bearerToken(req);
+  if (token === "") {
+    return "unauthorized";
+  }
+  const device = await findCollectorDevice(deps.pool, token);
+  if (device) {
+    return device.projectId === projectId ? "ok" : "forbidden";
+  }
+  const user = await deps.verifyUser(token);
+  if (!user) {
+    return "unauthorized";
+  }
+  return (await userCanAccessProject(deps.pool, user.id, projectId)) ? "ok" : "forbidden";
 }
 
 function uploadJson(upload: SessionUploadView) {

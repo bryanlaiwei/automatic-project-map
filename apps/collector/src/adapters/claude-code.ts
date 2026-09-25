@@ -1,6 +1,7 @@
+import { readFileSync } from "node:fs";
 import { textFromContent } from "../redact.js";
 import type { ParsedSession, SessionRecord } from "../types.js";
-import { readJsonLines } from "./codex.js";
+import { parseJsonLines } from "./codex.js";
 
 type JsonRecord = Record<string, unknown>;
 
@@ -16,7 +17,11 @@ function asString(value: unknown): string | null {
 }
 
 export function parseClaudeCodeSession(filePath: string): ParsedSession {
-  const lines = readJsonLines(filePath);
+  return parseClaudeCodeText(readFileSync(filePath, "utf8"));
+}
+
+export function parseClaudeCodeText(text: string): ParsedSession {
+  const lines = parseJsonLines(text);
   let sessionId: string | null = null;
   let sourceVersion: string | null = null;
   let createdAt: string | null = null;

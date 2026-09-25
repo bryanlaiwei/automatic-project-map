@@ -15,15 +15,19 @@ const { createApp } = await import("./app.js");
 const { verifySupabaseUser } = await import("./auth.js");
 const { getPool } = await import("./db.js");
 const { createGithubRepositoryAccessCheck } = await import("./github-app.js");
+const { createGithubEnricher } = await import("./github-enrich.js");
+
+const githubApp = {
+  appId: process.env.GITHUB_APP_ID ?? "",
+  privateKey: process.env.GITHUB_APP_PRIVATE_KEY ?? "",
+};
 
 const app = createApp({
   pool: getPool(),
   webhookSecret,
   verifyUser: verifySupabaseUser,
-  verifyRepositoryAccess: createGithubRepositoryAccessCheck({
-    appId: process.env.GITHUB_APP_ID ?? "",
-    privateKey: process.env.GITHUB_APP_PRIVATE_KEY ?? "",
-  }),
+  verifyRepositoryAccess: createGithubRepositoryAccessCheck(githubApp),
+  github: createGithubEnricher(githubApp),
 });
 
 const port = Number(process.env.API_PORT ?? 4000);

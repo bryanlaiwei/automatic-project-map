@@ -1,6 +1,22 @@
 import type { Pool } from "pg";
 import { normalizedEventSchema, type NormalizedEvent } from "@apm/shared";
+import {
+  applyPullRequestSnapshot,
+  applyWorkflowSnapshot,
+  preserveKnownMerge,
+  pullRequestNumbersForHead,
+  readKnownMerge,
+  savePullRequestObservation,
+  saveWorkflowObservation,
+  type PullRequestSnapshot,
+  type WorkflowSnapshot,
+} from "./github-enrich.js";
 import { normalizeGithubDelivery } from "./github.js";
+
+export type GithubLookup = {
+  enrichPullRequest(owner: string, name: string, number: number): Promise<PullRequestSnapshot | null>;
+  enrichWorkflowRun(owner: string, name: string, runId: number): Promise<WorkflowSnapshot | null>;
+};
 
 export type ProjectRow = {
   id: string;
@@ -203,7 +219,7 @@ export async function enqueueDelivery(
   return (result.rowCount ?? 0) > 0 ? "queued" : "duplicate";
 }
 
-export async function processQueuedDeliveries(pool: Pool): Promise<number> {
+export async function processQueuedDeliveries(pool: Pool, github?: GithubLookup): Promise<number> {
   const queued = await pool.query<DeliveryRow>(
     `select delivery_id, event_name, payload, status
      from webhook_deliveries
@@ -212,13 +228,13 @@ export async function processQueuedDeliveries(pool: Pool): Promise<number> {
   );
   let processed = 0;
   for (const delivery of queued.rows) {
-    await processDelivery(pool, delivery);
+    await processDelivery(pool, delivery, github);
     processed += 1;
   }
   return processed;
 }
 
-export async function processDelivery(pool: Pool, delivery: DeliveryRow): Promise<void> {
+export async function processDelivery(pool: Pool, delivery: DeliveryRow, github?: GithubLookup): Promise<void> {
   const payload = delivery.payload;
   const repoId =
     typeof payload === "object" &&
@@ -270,11 +286,95 @@ export async function processDelivery(pool: Pool, delivery: DeliveryRow): Promis
     return;
   }
 
-  await insertEvents(pool, normalized.events);
+  const events = await enrichDeliveryEvents(pool, project, normalized.events, github);
+  await insertEvents(pool, events);
+  for (const event of events) {
+    await savePullRequestObservation(pool, project.id, event);
+    await saveWorkflowObservation(pool, project.id, event);
+  }
   await pool.query(
     `update webhook_deliveries
      set status = 'processed', processed_at = now(), attempts = attempts + 1
      where delivery_id = $1`,
     [delivery.delivery_id],
   );
+}
+
+async function enrichDeliveryEvents(
+  pool: Pool,
+  project: ProjectRow,
+  events: NormalizedEvent[],
+  github: GithubLookup | undefined,
+): Promise<NormalizedEvent[]> {
+  const enriched: NormalizedEvent[] = [];
+  for (const event of events) {
+    enriched.push(await enrichOneEvent(pool, project, event, github));
+  }
+  return enriched;
+}
+
+async function enrichOneEvent(
+  pool: Pool,
+  project: ProjectRow,
+  event: NormalizedEvent,
+  github: GithubLookup | undefined,
+): Promise<NormalizedEvent> {
+  if (event.details.kind === "pr.updated") {
+    const fetched = github
+      ? await github.enrichPullRequest(project.github_owner, project.github_name, event.details.number)
+      : null;
+    const known = await readKnownMerge(pool, project.id, event.details.pullRequestId);
+    if (!fetched) {
+      return applyPullRequestSnapshot(event, preserveKnownMerge(snapshotFromEvent(event), known));
+    }
+    return applyPullRequestSnapshot(event, preserveKnownMerge(fetched, known));
+  }
+  if (event.details.kind === "workflow.updated" && event.details.jobId === null) {
+    const fetched = github
+      ? await github.enrichWorkflowRun(project.github_owner, project.github_name, event.details.runId)
+      : null;
+    const snapshot = fetched ?? snapshotFromWorkflowEvent(event);
+    if (snapshot.pullRequestNumbers.length === 0) {
+      const matched = await pullRequestNumbersForHead(pool, project.id, snapshot.headSha);
+      if (matched.length === 1) {
+        snapshot.pullRequestNumbers = matched;
+      }
+    }
+    return applyWorkflowSnapshot(event, snapshot);
+  }
+  return event;
+}
+
+function snapshotFromEvent(event: NormalizedEvent): PullRequestSnapshot {
+  if (event.details.kind !== "pr.updated") {
+    throw new Error("Expected a pull request event.");
+  }
+  return {
+    title: event.details.title,
+    body: event.details.body,
+    url: event.details.url,
+    draft: event.details.draft,
+    state: event.details.state,
+    merged: event.details.merged,
+    headSha: event.details.headSha,
+    updatedAt: event.details.updatedAt,
+    commits: event.details.commits ?? [],
+    files: event.details.files ?? [],
+  };
+}
+
+function snapshotFromWorkflowEvent(event: NormalizedEvent): WorkflowSnapshot {
+  if (event.details.kind !== "workflow.updated") {
+    throw new Error("Expected a workflow event.");
+  }
+  return {
+    status: event.details.status,
+    conclusion: event.details.conclusion,
+    headSha: event.details.headSha,
+    attempt: event.details.attempt,
+    url: event.details.url,
+    updatedAt: event.occurredAt,
+    pullRequestNumbers: [...event.details.pullRequestNumbers],
+    jobs: event.details.jobs ?? [],
+  };
 }
