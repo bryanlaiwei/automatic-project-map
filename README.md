@@ -43,4 +43,28 @@ npm run dev:web
 
 The collector uploads each session as ordered chunks of at most 96 KiB. Each HTTP request is limited to 512 KiB, and that limit does not cap the session. The API keeps chunks in `session_upload_chunks` until every chunk has arrived, then reassembles the original bytes and writes events. A failed upload resumes from the last acknowledged chunk. Chunk rows are removed after assembly, so absolute paths in the payload are not kept with the stored events. A later upload of the same session stores new records; an identical retry does not create a second copy.
 
+## Upload one session from the collector
+
+Sign in with the web app, connect the repository, and start the API (`npm run dev:api`). Then upload one local session. Codex and Claude Code take a session file. Cursor takes the session directory that contains `session.json` and `transcript.jsonl`. Roots are absolute paths.
+
+```bash
+psql "$DATABASE_URL" -c "select id, github_owner, github_name, tracking_started_at from projects;"
+
+export APM_ACCESS_TOKEN='paste-the-access-token'
+npm start -w @apm/collector -- upload \
+  /absolute/path/to/session.jsonl \
+  codex \
+  'project-uuid-from-the-query' \
+  'tracking-started-at-from-the-query' \
+  /absolute/selected/root
+```
+
+The API URL defaults to `http://127.0.0.1:4000`. Override it with `APM_API_URL` or `--api-url`. Put the token only in `APM_ACCESS_TOKEN`. The command exits with an error if that variable is missing, if you pass the token as an argument, or if the server rejects the reassembled bytes.
+
+The web app reads the same token from `supabase.auth.getSession()` and sends it as `Authorization: Bearer`. After you are signed in at `http://127.0.0.1:5173`, open the browser devtools, choose Application → Local Storage → that origin, and open the key `sb-127-auth-token` (the default local Supabase URL is `http://127.0.0.1:54321`; the key is `sb-` plus the first label of that host). The value is JSON. Copy its `access_token` field. In the console on that page:
+
+```js
+copy(JSON.parse(localStorage.getItem("sb-127-auth-token")).access_token)
+```
+
 Day 1 builds login, the single-repository GitHub connection, webhook reception, session samples, folder matching, and the common event contracts on top of this skeleton.

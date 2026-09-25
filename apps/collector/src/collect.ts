@@ -1,5 +1,11 @@
 import { realpathSync } from "node:fs";
-import { buildSessionEvents, evaluateSessionEligibility, type NormalizedEvent } from "@apm/shared";
+import {
+  buildSessionEvents,
+  evaluateSessionEligibility,
+  ingestedSessionSchema,
+  type IngestedSession,
+  type NormalizedEvent,
+} from "@apm/shared";
 import { parseClaudeCodeSession } from "./adapters/claude-code.js";
 import { parseCodexSession } from "./adapters/codex.js";
 import { parseCursorSession } from "./adapters/cursor.js";
@@ -114,5 +120,30 @@ export function collectSession(input: CollectInput): CollectResult {
     ...input,
     parsed: parseSession(input.agent, input.filePath),
     resolvePaths: true,
+  });
+}
+
+export function loadIngestedSession(input: {
+  agent: AgentId;
+  filePath: string;
+  selectedRoots: string[];
+}): IngestedSession {
+  const parsed = parseSession(input.agent, input.filePath);
+  if (parsed.sessionId === null) {
+    throw new Error("This session has no id, so it cannot be uploaded.");
+  }
+  const workingFolder =
+    parsed.ambiguousFolder || parsed.workingFolder === null ? null : resolveFolder(parsed.workingFolder);
+  if (parsed.workingFolder !== null && !parsed.ambiguousFolder && workingFolder === null) {
+    throw new Error("The session working folder could not be resolved, so it was not uploaded.");
+  }
+  return ingestedSessionSchema.parse({
+    source: input.agent,
+    sessionId: parsed.sessionId,
+    createdAt: parsed.createdAt,
+    workingFolder,
+    selectedRoots: input.selectedRoots,
+    sourceVersion: parsed.sourceVersion,
+    records: parsed.records,
   });
 }

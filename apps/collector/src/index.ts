@@ -1,20 +1,17 @@
-import { collectSession } from "./collect.js";
+import { runCli } from "./cli.js";
 
-const filePath = process.argv[2];
-const trackingStartedAt = process.argv[3];
-const agent = process.argv[4];
-const selectedRoots = process.argv.slice(5);
+const token = process.env.APM_ACCESS_TOKEN?.trim() ?? "";
 
-if (!filePath || !trackingStartedAt || (agent !== "codex" && agent !== "cursor" && agent !== "claude_code")) {
-  console.log("collector ready");
-  console.log("usage: npm start -w @apm/collector -- <file> <trackingStartedAt> <codex|cursor|claude_code> <root...>");
-} else {
-  const result = collectSession({
-    agent,
-    filePath,
-    projectId: "00000000-0000-4000-8000-000000000000",
-    trackingStartedAt,
-    selectedRoots,
-  });
-  console.log(JSON.stringify(result, null, 2));
-}
+void runCli(process.argv.slice(2), process.env, {
+  log: (line) => console.log(line),
+  error: (line) => console.error(line),
+}).then(
+  (result) => {
+    process.exit(result.exitCode);
+  },
+  (error: unknown) => {
+    const message = error instanceof Error ? error.message : "Collector failed.";
+    console.error(token === "" ? message : message.split(token).join("[redacted]"));
+    process.exit(1);
+  },
+);
