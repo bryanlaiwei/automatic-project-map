@@ -1,18 +1,14 @@
 import express, { type Request, type Response } from "express";
 import type { Pool } from "pg";
 import { z } from "zod";
-import {
-  evaluateSessionEligibility,
-  normalizedEventSchema,
-  SCHEMA_VERSION,
-  type NormalizedEvent,
-} from "@apm/shared";
+import { SCHEMA_VERSION, SESSION_CHUNK_REQUEST_LIMIT_BYTES, sessionAgentSchema } from "@apm/shared";
 import type { AuthUser } from "./auth.js";
+import type { RepositoryAccessCheck } from "./github-app.js";
 import { verifyGithubSignature } from "./github.js";
+import { acceptSessionChunk, getSessionUpload, resetSessionUpload, type SessionUploadView } from "./session-uploads.js";
 import {
   connectRepository,
   enqueueDelivery,
-  insertEvents,
   getProjectForUser,
   listEvents,
   listProjects,
@@ -26,32 +22,29 @@ const connectBody = z.object({
   repoId: z.number().int().positive(),
 });
 
-const sessionRecord = z.object({
-  id: z.string().min(1),
-  role: z.enum(["user", "assistant"]),
-  text: z.string(),
-  occurredAt: z.string().datetime(),
+const chunkBody = z.object({
+  projectId: z.string().uuid(),
+  source: sessionAgentSchema,
+  sessionId: z.string().min(1),
+  chunkIndex: z.number().int().nonnegative(),
+  chunkCount: z.number().int().positive(),
+  contentSha256: z.string().regex(/^[a-f0-9]{64}$/),
+  payload: z.string(),
+  replace: z.boolean().optional(),
 });
 
-const ingestBody = z.object({
+const chunkQuery = z.object({
   projectId: z.string().uuid(),
-  sessions: z.array(
-    z.object({
-      source: z.enum(["codex", "cursor", "claude_code"]),
-      sessionId: z.string().min(1),
-      createdAt: z.string().datetime().nullable(),
-      workingFolder: z.string().nullable(),
-      selectedRoots: z.array(z.string()),
-      sourceVersion: z.string().nullable(),
-      records: z.array(sessionRecord),
-    }),
-  ),
+  source: sessionAgentSchema,
+  sessionId: z.string().min(1),
+  contentSha256: z.string().regex(/^[a-f0-9]{64}$/).optional(),
 });
 
 export type AppDeps = {
   pool: Pool;
   webhookSecret: string;
   verifyUser: (token: string) => Promise<AuthUser | null>;
+  verifyRepositoryAccess: RepositoryAccessCheck;
 };
 
 function bearerToken(req: Request): string {
@@ -69,6 +62,12 @@ async function requireUser(deps: AppDeps, req: Request, res: Response): Promise<
 }
 
 export function createApp(deps: AppDeps) {
+  if (deps.webhookSecret.trim() === "") {
+    throw new Error(
+      "GITHUB_WEBHOOK_SECRET is missing or empty. Refusing to start because an empty secret would accept forged webhooks.",
+    );
+  }
+
   const app = express();
   const allowedOrigins = new Set([
     process.env.WEB_ORIGIN ?? "http://127.0.0.1:5173",
@@ -82,7 +81,7 @@ export function createApp(deps: AppDeps) {
       res.setHeader("Access-Control-Allow-Origin", requestOrigin);
     }
     res.setHeader("Access-Control-Allow-Headers", "Authorization, Content-Type");
-    res.setHeader("Access-Control-Allow-Methods", "GET, POST, OPTIONS");
+    res.setHeader("Access-Control-Allow-Methods", "GET, POST, DELETE, OPTIONS");
     if (req.method === "OPTIONS") {
       res.status(204).end();
       return;
@@ -143,7 +142,7 @@ export function createApp(deps: AppDeps) {
     res.status(202).json({ accepted: true, duplicate: false });
   });
 
-  app.use(express.json());
+  app.use(express.json({ limit: SESSION_CHUNK_REQUEST_LIMIT_BYTES }));
 
   app.post("/projects", async (req, res) => {
     const user = await requireUser(deps, req, res);
@@ -155,9 +154,31 @@ export function createApp(deps: AppDeps) {
       res.status(400).json({ error: "Repository owner, name, and numeric id are required." });
       return;
     }
+    const access = await deps.verifyRepositoryAccess(parsed.data);
+    switch (access.status) {
+      case "accessible":
+        break;
+      case "denied":
+        res.status(403).json({
+          error: "The GitHub App is not installed on this repository, or the repository id does not match.",
+        });
+        return;
+      case "not_configured":
+      case "unavailable":
+        res.status(503).json({ error: access.message });
+        return;
+      default: {
+        const unexpected: never = access;
+        throw new Error(`Unexpected repository access result: ${JSON.stringify(unexpected)}`);
+      }
+    }
     const result = await connectRepository(deps.pool, { userId: user.id, ...parsed.data });
     if ("error" in result) {
-      res.status(409).json({ error: "This account already has a connected repository." });
+      const message =
+        result.error === "repo_taken"
+          ? "This repository is already connected."
+          : "This account already has a connected repository.";
+      res.status(409).json({ error: message });
       return;
     }
     res.status(201).json({
@@ -202,14 +223,20 @@ export function createApp(deps: AppDeps) {
     res.json({ events });
   });
 
-  app.post("/ingest/sessions", async (req, res) => {
+  app.get("/ingest/sessions/chunks", async (req, res) => {
     const user = await requireUser(deps, req, res);
     if (!user) {
       return;
     }
-    const parsed = ingestBody.safeParse(req.body);
+    const contentSha256 = singleQuery(req.query.contentSha256);
+    const parsed = chunkQuery.safeParse({
+      projectId: singleQuery(req.query.projectId),
+      source: singleQuery(req.query.source),
+      sessionId: singleQuery(req.query.sessionId),
+      ...(contentSha256 ? { contentSha256 } : {}),
+    });
     if (!parsed.success) {
-      res.status(400).json({ error: "Session batch is invalid." });
+      res.status(400).json({ error: "Session upload query is invalid." });
       return;
     }
     const project = await getProjectForUser(deps.pool, user.id, parsed.data.projectId);
@@ -217,72 +244,110 @@ export function createApp(deps: AppDeps) {
       res.status(404).json({ error: "Project not found." });
       return;
     }
+    const upload = await getSessionUpload(deps.pool, {
+      projectId: parsed.data.projectId,
+      source: parsed.data.source,
+      sessionId: parsed.data.sessionId,
+      contentSha256: parsed.data.contentSha256 ?? null,
+    });
+    res.json(uploadJson(upload));
+  });
 
-    const results = [];
-    const events: NormalizedEvent[] = [];
-    for (const session of parsed.data.sessions) {
-      const decision = evaluateSessionEligibility({
-        createdAt: session.createdAt,
-        trackingStartedAt: project.tracking_started_at.toISOString(),
-        workingFolder: session.workingFolder,
-        selectedRoots: session.selectedRoots,
-      });
-      if (!decision.eligible) {
-        results.push({ sessionId: session.sessionId, stored: false, reason: decision.reason });
-        continue;
-      }
-      events.push(...buildAcceptedSession(session, parsed.data.projectId));
-      results.push({ sessionId: session.sessionId, stored: true, reason: null });
+  app.delete("/ingest/sessions/chunks", async (req, res) => {
+    const user = await requireUser(deps, req, res);
+    if (!user) {
+      return;
     }
-    const stored = await insertEvents(deps.pool, events);
-    res.status(202).json({ results, stored });
+    const parsed = chunkQuery.omit({ contentSha256: true }).safeParse({
+      projectId: singleQuery(req.query.projectId),
+      source: singleQuery(req.query.source),
+      sessionId: singleQuery(req.query.sessionId),
+    });
+    if (!parsed.success) {
+      res.status(400).json({ error: "Session upload query is invalid." });
+      return;
+    }
+    const project = await getProjectForUser(deps.pool, user.id, parsed.data.projectId);
+    if (!project) {
+      res.status(404).json({ error: "Project not found." });
+      return;
+    }
+    await resetSessionUpload(deps.pool, parsed.data);
+    res.status(204).end();
+  });
+
+  app.post("/ingest/sessions/chunks", async (req, res) => {
+    const user = await requireUser(deps, req, res);
+    if (!user) {
+      return;
+    }
+    const parsed = chunkBody.safeParse(req.body);
+    if (!parsed.success) {
+      res.status(400).json({ error: "Session chunk is invalid." });
+      return;
+    }
+    const payload = decodeChunkPayload(parsed.data.payload);
+    if (!payload) {
+      res.status(400).json({ error: "Session chunk payload is not base64." });
+      return;
+    }
+    const project = await getProjectForUser(deps.pool, user.id, parsed.data.projectId);
+    if (!project) {
+      res.status(404).json({ error: "Project not found." });
+      return;
+    }
+    const result = await acceptSessionChunk(deps.pool, {
+      projectId: parsed.data.projectId,
+      source: parsed.data.source,
+      sessionId: parsed.data.sessionId,
+      chunkIndex: parsed.data.chunkIndex,
+      chunkCount: parsed.data.chunkCount,
+      contentSha256: parsed.data.contentSha256,
+      payload,
+      replace: parsed.data.replace === true,
+    });
+    if (result.status === "conflict") {
+      res.status(409).json({
+        error: "This chunk does not match the upload already in progress. Resume that upload or reset it.",
+      });
+      return;
+    }
+    if (result.status === "invalid") {
+      res.status(400).json({ error: result.message });
+      return;
+    }
+    res.status(result.upload.complete ? 202 : 200).json(uploadJson(result.upload));
   });
 
   return app;
 }
 
-function buildAcceptedSession(
-  session: z.infer<typeof ingestBody>["sessions"][number],
-  projectId: string,
-): NormalizedEvent[] {
-  if (session.createdAt === null) {
-    return [];
+function uploadJson(upload: SessionUploadView) {
+  return {
+    acknowledged: upload.acknowledged,
+    chunkCount: upload.chunkCount,
+    contentSha256: upload.contentSha256,
+    complete: upload.complete,
+    stored: upload.outcome?.stored ?? null,
+    reason: upload.outcome?.reason ?? null,
+    eventsStored: upload.outcome?.eventsStored ?? null,
+  };
+}
+
+function singleQuery(value: unknown): string | undefined {
+  return typeof value === "string" && value.length > 0 ? value : undefined;
+}
+
+function decodeChunkPayload(payload: string): Buffer | null {
+  if (payload.length === 0) {
+    return Buffer.alloc(0);
   }
-  const started = normalizedEventSchema.parse({
-    schemaVersion: SCHEMA_VERSION,
-    eventId: `${session.source}:${session.sessionId}:started`,
-    sourceKey: `${session.source}:${session.sessionId}:started`,
-    projectId,
-    source: session.source,
-    occurredAt: session.createdAt,
-    details: {
-      kind: "session.started",
-      sessionId: session.sessionId,
-      createdAt: session.createdAt,
-      sourceVersion: session.sourceVersion,
-    },
-  });
-  const events = [started];
-  const first = session.records[0];
-  if (first) {
-    events.push(
-      normalizedEventSchema.parse({
-        schemaVersion: SCHEMA_VERSION,
-        eventId: `${session.source}:${session.sessionId}:content`,
-        sourceKey: `${session.source}:${session.sessionId}:content`,
-        projectId,
-        source: session.source,
-        occurredAt: first.occurredAt,
-        details: {
-          kind: "session.content_added",
-          sessionId: session.sessionId,
-          createdAt: session.createdAt,
-          sourceVersion: session.sourceVersion,
-          recordIds: session.records.map((record) => record.id),
-          messages: session.records,
-        },
-      }),
-    );
+  if (payload.length % 4 !== 0 || !/^[A-Za-z0-9+/]+={0,2}$/.test(payload)) {
+    return null;
   }
-  return events;
+  const decoded = Buffer.from(payload, "base64");
+  if (decoded.toString("base64") !== payload) {
+    return null;
+  }
+  return decoded;
 }

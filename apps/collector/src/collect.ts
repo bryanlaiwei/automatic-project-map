@@ -1,10 +1,5 @@
 import { realpathSync } from "node:fs";
-import {
-  evaluateSessionEligibility,
-  normalizedEventSchema,
-  SCHEMA_VERSION,
-  type NormalizedEvent,
-} from "@apm/shared";
+import { buildSessionEvents, evaluateSessionEligibility, type NormalizedEvent } from "@apm/shared";
 import { parseClaudeCodeSession } from "./adapters/claude-code.js";
 import { parseCodexSession } from "./adapters/codex.js";
 import { parseCursorSession } from "./adapters/cursor.js";
@@ -76,44 +71,27 @@ export function eventsFromParsedSession(input: {
     return { eligible: false, reason: "missing_creation_time", events: [] };
   }
 
-  const started = normalizedEventSchema.parse({
-    schemaVersion: SCHEMA_VERSION,
-    eventId: `${input.agent}:${input.parsed.sessionId}:started`,
-    sourceKey: `${input.agent}:${input.parsed.sessionId}:started`,
-    projectId: input.projectId,
-    source: input.agent,
-    occurredAt: createdAt,
-    details: {
-      kind: "session.started",
-      sessionId: input.parsed.sessionId,
-      createdAt,
-      sourceVersion: input.parsed.sourceVersion,
-    },
-  });
-
-  const events = [started];
-  if (input.parsed.records.length > 0) {
-    events.push(
-      normalizedEventSchema.parse({
-        schemaVersion: SCHEMA_VERSION,
-        eventId: `${input.agent}:${input.parsed.sessionId}:content`,
-        sourceKey: `${input.agent}:${input.parsed.sessionId}:content`,
-        projectId: input.projectId,
-        source: input.agent,
-        occurredAt: input.parsed.records[0]?.occurredAt ?? createdAt,
-        details: {
-          kind: "session.content_added",
-          sessionId: input.parsed.sessionId,
-          createdAt,
-          sourceVersion: input.parsed.sourceVersion,
-          recordIds: input.parsed.records.map((record) => record.id),
-          messages: input.parsed.records,
-        },
-      }),
-    );
+  const sessionId = input.parsed.sessionId;
+  if (sessionId === null) {
+    return { eligible: false, reason: "missing_creation_time", events: [] };
   }
 
-  return { eligible: true, reason: null, events };
+  return {
+    eligible: true,
+    reason: null,
+    events: buildSessionEvents({
+      projectId: input.projectId,
+      session: {
+        source: input.agent,
+        sessionId,
+        createdAt,
+        workingFolder,
+        selectedRoots: input.selectedRoots,
+        sourceVersion: input.parsed.sourceVersion,
+        records: input.parsed.records,
+      },
+    }),
+  };
 }
 
 function parseSession(agent: AgentId, filePath: string): ParsedSession {

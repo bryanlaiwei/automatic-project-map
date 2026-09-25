@@ -16,14 +16,35 @@ function asString(value: unknown): string | null {
 }
 
 export function readJsonLines(filePath: string): JsonRecord[] {
-  const text = readFileSync(filePath, "utf8");
+  return parseJsonLines(readFileSync(filePath, "utf8"));
+}
+
+export function parseJsonLines(text: string): JsonRecord[] {
+  if (text === "") {
+    return [];
+  }
+  const endsWithNewline = text.endsWith("\n");
+  const lines = text.split("\n");
+  if (endsWithNewline) {
+    lines.pop();
+  }
   const records: JsonRecord[] = [];
-  for (const line of text.split("\n")) {
+  for (let index = 0; index < lines.length; index += 1) {
+    const line = lines[index] ?? "";
     const trimmed = line.trim();
     if (trimmed === "") {
       continue;
     }
-    const parsed: unknown = JSON.parse(trimmed);
+    const isLast = index === lines.length - 1;
+    let parsed: unknown;
+    try {
+      parsed = JSON.parse(trimmed) as unknown;
+    } catch (error) {
+      if (isLast && !endsWithNewline) {
+        continue;
+      }
+      throw error;
+    }
     const record = asRecord(parsed);
     if (record) {
       records.push(record);

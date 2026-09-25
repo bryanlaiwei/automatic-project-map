@@ -1,8 +1,10 @@
 import { describe, expect, it } from "vitest";
-import { fileURLToPath } from "node:url";
+import { mkdtempSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
+import { fileURLToPath } from "node:url";
 import { parseClaudeCodeSession } from "./adapters/claude-code.js";
-import { parseCodexSession } from "./adapters/codex.js";
+import { parseCodexSession, parseJsonLines } from "./adapters/codex.js";
 import { parseCursorSession } from "./adapters/cursor.js";
 import { eventsFromParsedSession } from "./collect.js";
 
@@ -69,5 +71,49 @@ describe("session samples", () => {
 
     const undated = collect("codex", { ...parsed, createdAt: null }, ["/Projects/my-app"]);
     expect(undated).toMatchObject({ eligible: false, reason: "missing_creation_time", events: [] });
+  });
+
+  it("keeps a later content upload distinct from an identical retry", () => {
+    const parsed = parseCodexSession(join(fixtures, "codex/session.jsonl"));
+    const first = collect("codex", parsed, ["/Projects/my-app"]);
+    const again = collect("codex", parsed, ["/Projects/my-app"]);
+    expect(again.events.map((event) => event.eventId)).toEqual(first.events.map((event) => event.eventId));
+
+    const extra = {
+      ...parsed,
+      records: [
+        ...parsed.records,
+        {
+          id: "later",
+          role: "user" as const,
+          text: "Follow-up that must be kept",
+          occurredAt: "2026-09-24T18:05:00.000Z",
+        },
+      ],
+    };
+    const second = collect("codex", extra, ["/Projects/my-app"]);
+    const firstContent = first.events.find((event) => event.details.kind === "session.content_added");
+    const secondContent = second.events.find((event) => event.details.kind === "session.content_added");
+    expect(secondContent?.eventId).not.toBe(firstContent?.eventId);
+    if (secondContent?.details.kind !== "session.content_added") {
+      throw new Error("expected content");
+    }
+    expect(secondContent.details.messages.map((message) => message.text)).toContain("Follow-up that must be kept");
+  });
+
+  it("defers a half-written final line and still reads a finished session", () => {
+    const finished = '{"type":"session_meta","payload":{"id":"s","timestamp":"2026-09-24T18:00:00.000Z","cwd":"/Projects/my-app"}}\n{"type":"event_msg","timestamp":"2026-09-24T18:00:01.000Z","payload":{"type":"user_message","message":"hello"}}';
+    expect(parseJsonLines(finished)).toHaveLength(2);
+
+    const partial = `${finished}\n{"type":"event_msg","timestamp":"2026-09-24T18:00:02.000Z","payload":`;
+    expect(parseJsonLines(partial)).toHaveLength(2);
+    expect(() => parseJsonLines(`${partial}\n`)).toThrow();
+
+    const directory = mkdtempSync(join(tmpdir(), "session-"));
+    const filePath = join(directory, "session.jsonl");
+    writeFileSync(filePath, partial);
+    const parsed = parseCodexSession(filePath);
+    expect(parsed.sessionId).toBe("s");
+    expect(parsed.records.map((record) => record.text)).toEqual(["hello"]);
   });
 });

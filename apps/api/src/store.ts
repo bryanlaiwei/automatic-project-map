@@ -21,7 +21,7 @@ type DeliveryRow = {
 export async function connectRepository(
   pool: Pool,
   input: { userId: string; owner: string; name: string; repoId: number },
-): Promise<{ project: ProjectRow } | { error: "already_connected" }> {
+): Promise<{ project: ProjectRow } | { error: "already_connected" | "repo_taken" }> {
   const client = await pool.connect();
   try {
     await client.query("begin");
@@ -35,6 +35,12 @@ export async function connectRepository(
     if ((existing.rowCount ?? 0) > 0) {
       await client.query("rollback");
       return { error: "already_connected" };
+    }
+
+    const claimed = await client.query(`select 1 from projects where github_repo_id = $1`, [input.repoId]);
+    if ((claimed.rowCount ?? 0) > 0) {
+      await client.query("rollback");
+      return { error: "repo_taken" };
     }
 
     const workspace = await client.query<{ id: string }>(
@@ -63,6 +69,9 @@ export async function connectRepository(
     return { project: created };
   } catch (error) {
     await client.query("rollback");
+    if (isRepoIdConflict(error)) {
+      return { error: "repo_taken" };
+    }
     throw error;
   } finally {
     client.release();
@@ -110,11 +119,28 @@ export async function userCanAccessProject(pool: Pool, userId: string, projectId
   return (result.rowCount ?? 0) > 0;
 }
 
+type Queryable = {
+  query: Pool["query"];
+};
+
+function isRepoIdConflict(error: unknown): boolean {
+  if (typeof error !== "object" || error === null) {
+    return false;
+  }
+  const code = "code" in error ? error.code : undefined;
+  const constraint = "constraint" in error ? error.constraint : undefined;
+  return code === "23505" && constraint === "projects_github_repo_id_key";
+}
+
 export async function insertEvents(pool: Pool, events: NormalizedEvent[]): Promise<number> {
+  return insertEventsWith(pool, events);
+}
+
+export async function insertEventsWith(db: Queryable, events: NormalizedEvent[]): Promise<number> {
   let stored = 0;
   for (const event of events) {
     const parsed = normalizedEventSchema.parse(event);
-    const result = await pool.query(
+    const result = await db.query(
       `insert into normalized_events
         (event_id, source_key, project_id, source, kind, occurred_at, details, schema_version)
        values ($1, $2, $3, $4, $5, $6, $7::jsonb, $8)
