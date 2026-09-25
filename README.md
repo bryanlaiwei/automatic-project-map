@@ -20,7 +20,7 @@ This repository is the local pilot from the MVP plan: a TypeScript npm workspace
 - Node.js 22
 - Docker Desktop, running, for `supabase start`
 - A GitHub OAuth app for local login, and a GitHub App for pull request and Actions webhooks
-- An Anthropic API key when interpretation work starts
+- An OpenAI API key (`OPENAI_API_KEY`) for grouping work into the map. Without it, GitHub and session facts are still stored and pull request states still update.
 
 Copy `.env.example` to `.env` and fill the values after `supabase status`. Do not commit `.env`.
 
@@ -84,3 +84,29 @@ The web app creates a one-time code and hands it to the helper at `http://127.0.
 While it runs, the helper scans the agent logs every 30 seconds and uploads what it queued. It reads `~/.codex/sessions` and `~/.claude/projects` by default. Cursor sessions are read only from a folder set in `APM_CURSOR_SESSIONS`, because Cursor does not write `session.json` and `transcript.jsonl` without a hook. Files that have not changed since the last scan are skipped. A session's new messages are split into events of at most 200 messages and 256 KiB, and a single message longer than 32 KiB is shortened. The queue is sent in requests of at most 100 events and 448 KiB, so it always fits the API's limits. When the API is unreachable, the helper retries after 5 seconds, then doubles the wait up to 5 minutes. When the API refuses the device token, the helper page asks you to connect again. Events the API rejects for good (for example a session created before tracking) are dropped from the queue. The page shows the last scan, the last upload, what is waiting, and any paused sessions, and has a "Scan now" button.
 
 The worker (`npm run dev:worker`) runs two pg-boss schedules. Every minute it processes webhook deliveries that are still queued a minute after they arrived, for example because the API stopped mid-request. Every 5 minutes it asks GitHub for the current state of open pull requests and unfinished workflow runs seen in the last 30 days and 24 hours, and stores an update when GitHub reports a newer one. A delivery whose processing fails is retried by the sweep and marked `failed` after 5 attempts; it no longer holds up the deliveries behind it.
+
+Day 3 turns stored events into the map. The worker checks every 5 seconds for projects with new events and processes each project one at a time, in two stages.
+
+The facts stage uses no AI. It records pull requests, reviews and workflow runs (keeping every rerun attempt), and turns new session messages and new pull request descriptions into evidence. A message that was already stored does not become evidence again, and a pull request update that only changes GitHub's timestamp creates none. A work item's state comes from its pull requests when it has any: open means in review, a draft means in progress, and it counts as merged only when every pull request is closed and at least one was merged. Without pull requests, a session can only make work planned or in progress, so an agent saying "done" never marks anything merged.
+
+The interpretation stage sends new evidence to the OpenAI model once no new evidence has arrived for 20 seconds, or 60 seconds after the oldest piece is waiting. Up to 12 pieces go at once, along with the existing features, the work items most likely to be related (same session, same or explicitly linked pull request, recent, or sharing words), and earlier excerpts from the same sessions. The model answers with a fixed JSON shape. It refers to evidence and records only by short labels from the prompt, such as `E1` or `W2`, so it cannot name a record it was not shown. The API checks every operation before saving it and drops any that cite unknown labels, give no evidence, or change something a person set. Text inside sessions and pull requests is marked as data in the prompt. When the model call fails, the facts stay, the map keeps its last version, and the evidence is retried with a growing delay (30 seconds, doubling up to 30 minutes, 6 attempts). When the model returns no changes, processing finishes and the map revision stays the same.
+
+The map revision goes up only when something a viewer can see changes. The API serves it at:
+
+| Route | Returns |
+|---|---|
+| `GET /projects/:id/graph` | Features, their work items with state and counts, dependencies, and how much evidence still waits for analysis |
+| `GET /projects/:id/graph/revision` | Only the revision number, for cheap polling |
+| `GET /projects/:id/work-items/:workItemId` | Pull requests with CI runs, evidence excerpts, contributors, dependencies and change history |
+| `GET /projects/:id/features/:featureId` | The feature's work items, contributors and history |
+| `POST /projects/:id/corrections` | Applies `rename`, `move`, `merge`, `split` or `dismiss` |
+
+A correction is saved as a person's decision. A renamed title or a moved item is not changed back by later analysis. A merged item's old id keeps resolving to the item it was merged into. Evidence and pull requests split out of an item cannot be attached to it again. A dismissed dependency stays dismissed. If a correction lands while the model is still working on records it touched, that answer is discarded and the evidence is analyzed again against the corrected map.
+
+To check grouping quality with a real model, set `OPENAI_API_KEY` and run:
+
+```bash
+npm run eval -w @apm/api
+```
+
+It feeds sample sessions from all three agents and a few pull requests into a temporary project, prints the resulting map, and reports how many pairs of related evidence ended up together and how many unrelated pairs stayed apart. The project is deleted afterwards unless you pass `-- --keep`. `OPENAI_MODEL` defaults to `gpt-5-mini`.

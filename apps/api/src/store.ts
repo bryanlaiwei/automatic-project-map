@@ -385,6 +385,7 @@ function snapshotFromEvent(event: NormalizedEvent): PullRequestSnapshot {
     merged: event.details.merged,
     headSha: event.details.headSha,
     updatedAt: event.details.updatedAt,
+    author: event.details.author ?? null,
     commits: event.details.commits ?? [],
     files: event.details.files ?? [],
   };

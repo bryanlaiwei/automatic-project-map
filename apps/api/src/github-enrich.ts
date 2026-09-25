@@ -13,6 +13,7 @@ export type PullRequestSnapshot = {
   merged: boolean;
   headSha: string;
   updatedAt: string;
+  author: string | null;
   commits: Array<{ sha: string; message: string }>;
   files: Array<{ filename: string; status: string }>;
 };
@@ -45,6 +46,7 @@ export function applyPullRequestSnapshot(event: NormalizedEvent, snapshot: PullR
       merged: snapshot.merged,
       headSha: snapshot.headSha,
       updatedAt: snapshot.updatedAt,
+      ...(snapshot.author ? { author: snapshot.author } : {}),
       commits: snapshot.commits,
       files: snapshot.files,
     },
@@ -203,6 +205,7 @@ export function snapshotFromPullRequest(body: unknown, commitsBody: unknown, fil
     merged: typeof body.merged_at === "string" || body.merged === true,
     headSha: head,
     updatedAt: new Date(updatedAt).toISOString(),
+    author: isRecord(body.user) ? asString(body.user.login) : null,
     commits: readCommits(commitsBody),
     files: readFiles(filesBody),
   };
