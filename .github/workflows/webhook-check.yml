@@ -1,0 +1,8 @@
+name: webhook-check
+on:
+  pull_request:
+jobs:
+  ping:
+    runs-on: ubuntu-latest
+    steps:
+      - run: echo webhook-check
