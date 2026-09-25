@@ -5,7 +5,8 @@
   "exports": {
     "./env": "./src/env.ts",
     "./db": "./src/db.ts",
-    "./store": "./src/store.ts"
+    "./store": "./src/store.ts",
+    "./github-enrich": "./src/github-enrich.ts"
   },
   "type": "module",
   "scripts": {

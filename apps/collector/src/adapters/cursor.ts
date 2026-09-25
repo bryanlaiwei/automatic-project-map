@@ -2,7 +2,7 @@ import { readFileSync } from "node:fs";
 import { join } from "node:path";
 import { textFromContent } from "../redact.js";
 import type { ParsedSession, SessionRecord } from "../types.js";
-import { readJsonLines } from "./codex.js";
+import { parseJsonLines } from "./codex.js";
 
 type JsonRecord = Record<string, unknown>;
 
@@ -18,8 +18,14 @@ function asString(value: unknown): string | null {
 }
 
 export function parseCursorSession(directoryPath: string): ParsedSession {
-  const meta = asRecord(JSON.parse(readFileSync(join(directoryPath, "session.json"), "utf8")));
-  const lines = readJsonLines(join(directoryPath, "transcript.jsonl"));
+  const metaText = readFileSync(join(directoryPath, "session.json"), "utf8");
+  const transcript = readFileSync(join(directoryPath, "transcript.jsonl"), "utf8");
+  return parseCursorText(metaText, transcript);
+}
+
+export function parseCursorText(metaText: string, transcript: string): ParsedSession {
+  const meta = asRecord(JSON.parse(metaText) as unknown);
+  const lines = parseJsonLines(transcript);
   const records: SessionRecord[] = [];
 
   for (const [index, line] of lines.entries()) {

@@ -68,3 +68,13 @@ copy(JSON.parse(localStorage.getItem("sb-127-auth-token")).access_token)
 ```
 
 Day 1 builds login, the single-repository GitHub connection, webhook reception, session samples, folder matching, and the common event contracts on top of this skeleton.
+
+Day 2 makes collection recoverable. The helper keeps per-session checkpoints and an upload queue in SQLite. Eligible sessions are queued from the beginning of the log, including opening messages found after the helper starts. A session created before tracking stays excluded when it is resumed. Appended lines are queued once. If the upload fails, the queue is still there after a restart and the same event ids are sent again.
+
+Pair the helper from the signed-in site, then pick folders on the local page:
+
+```bash
+npm start -w @apm/collector -- serve
+```
+
+The page listens on `http://127.0.0.1:47321`. Create a pairing code in the web app and paste it there. The helper stores a revocable device token. `DELETE /collector/token` with that token stops further uploads.

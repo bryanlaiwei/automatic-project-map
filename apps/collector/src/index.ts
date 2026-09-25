@@ -7,6 +7,9 @@ void runCli(process.argv.slice(2), process.env, {
   error: (line) => console.error(line),
 }).then(
   (result) => {
+    if (process.argv[2] === "serve" && result.exitCode === 0) {
+      return;
+    }
     process.exit(result.exitCode);
   },
   (error: unknown) => {
