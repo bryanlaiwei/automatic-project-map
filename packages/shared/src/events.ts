@@ -31,6 +31,7 @@ export const prUpdatedDetailsSchema = z.object({
   merged: z.boolean(),
   headSha: z.string().min(1),
   updatedAt: isoTime,
+  author: z.string().min(1).optional(),
   commits: z.array(prCommitSchema).optional(),
   files: z.array(prFileSchema).optional(),
 });

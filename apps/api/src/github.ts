@@ -119,15 +119,24 @@ function pullRequestEvent(input: {
   payload: JsonRecord;
   receivedAt: string;
 }): WebhookResult {
+  const event = pullRequestFromPayload(input, `github:${input.deliveryId}`);
+  return event ? { status: "events", events: [event] } : { status: "ignore", note: "invalid_pull_request" };
+}
+
+function pullRequestFromPayload(
+  input: { projectId: string; payload: JsonRecord; receivedAt: string },
+  eventId: string,
+): NormalizedEvent | null {
   const pullRequest = input.payload.pull_request;
   const repoId = repositoryId(input.payload);
   if (!isRecord(pullRequest) || repoId === null || typeof pullRequest.id !== "number") {
-    return { status: "ignore", note: "invalid_pull_request" };
+    return null;
   }
   const updatedAt = iso(pullRequest.updated_at, input.receivedAt);
-  const event = normalizedEventSchema.parse({
+  const author = isRecord(pullRequest.user) && typeof pullRequest.user.login === "string" ? pullRequest.user.login : "";
+  return normalizedEventSchema.parse({
     schemaVersion: SCHEMA_VERSION,
-    eventId: `github:${input.deliveryId}`,
+    eventId,
     sourceKey: `github:pr:${pullRequest.id}:${updatedAt}`,
     projectId: input.projectId,
     source: "github",
@@ -145,9 +154,9 @@ function pullRequestEvent(input: {
       merged: typeof pullRequest.merged_at === "string",
       headSha: isRecord(pullRequest.head) && typeof pullRequest.head.sha === "string" ? pullRequest.head.sha : "unknown",
       updatedAt,
+      ...(author !== "" ? { author } : {}),
     },
   });
-  return { status: "events", events: [event] };
 }
 
 function reviewEvent(input: {
@@ -184,7 +193,9 @@ function reviewEvent(input: {
       submittedAt,
     },
   });
-  return { status: "events", events: [event] };
+  // A review is an update to its pull request, so a pull request first seen through a review still enters the map.
+  const pullRequestUpdate = pullRequestFromPayload(input, `github:${input.deliveryId}:pull_request`);
+  return { status: "events", events: pullRequestUpdate ? [pullRequestUpdate, event] : [event] };
 }
 
 function workflowRunEvent(input: {
