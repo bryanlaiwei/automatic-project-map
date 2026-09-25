@@ -1,0 +1,2 @@
+{"type":"user","sessionId":"claude-session-1","cwd":"/Projects/my-app","timestamp":"2026-09-24T18:10:00.000Z","uuid":"msg-1","version":"2.1.227","message":{"role":"user","content":"Start the password reset form."}}
+{"type":"assistant","sessionId":"claude-session-1","cwd":"/Projects/my-app","timestamp":"2026-09-24T18:10:05.000Z","uuid":"msg-2","version":"2.1.227","message":{"role":"assistant","content":[{"type":"thinking","thinking":"hidden"},{"type":"text","text":"I added the form."},{"type":"tool_result","content":"large log"}]}}

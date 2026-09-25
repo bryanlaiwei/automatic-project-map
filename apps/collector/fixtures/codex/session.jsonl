@@ -1,0 +1,3 @@
+{"timestamp":"2026-09-24T18:00:00.000Z","type":"session_meta","payload":{"id":"codex-session-1","timestamp":"2026-09-24T18:00:00.000Z","cwd":"/Projects/my-app","cli_version":"0.130.0","source":"cli"}}
+{"timestamp":"2026-09-24T18:00:01.000Z","type":"event_msg","payload":{"type":"user_message","message":"Add reset-email validation."}}
+{"timestamp":"2026-09-24T18:00:02.000Z","type":"response_item","payload":{"type":"message","role":"assistant","content":[{"type":"output_text","text":"I will add the check."},{"type":"reasoning","text":"hidden"}]}}
