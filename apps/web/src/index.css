@@ -1,35 +1,71 @@
 @import "tailwindcss";
 
+@theme {
+  --font-sans: ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", Inter, "Helvetica Neue", sans-serif;
+  --font-mono: ui-monospace, SFMono-Regular, Menlo, monospace;
+}
+
+html,
+body,
+#root {
+  height: 100%;
+}
+
 body {
   margin: 0;
-  font-family: system-ui, sans-serif;
-  background: #f6f7f9;
-  color: #1c2430;
+  background: #f7f7f8;
+  color: var(--color-zinc-900);
+  font-family: var(--font-sans);
+  -webkit-font-smoothing: antialiased;
+  -moz-osx-font-smoothing: grayscale;
 }
 
-.page {
-  max-width: 40rem;
-  margin: 2rem auto;
-  padding: 0 1rem 3rem;
+@keyframes apm-fade-in {
+  from {
+    opacity: 0;
+    transform: translateY(4px) scale(0.985);
+  }
+  to {
+    opacity: 1;
+    transform: none;
+  }
 }
 
-label {
-  display: block;
-  margin: 0.75rem 0;
+@keyframes apm-slide-in {
+  from {
+    opacity: 0;
+    transform: translateX(12px);
+  }
+  to {
+    opacity: 1;
+    transform: none;
+  }
 }
 
-input {
-  display: block;
-  width: 100%;
-  margin-top: 0.25rem;
-  padding: 0.4rem 0.5rem;
+.animate-in {
+  animation: apm-fade-in 160ms ease-out;
 }
 
-button {
-  margin-top: 0.75rem;
-  padding: 0.45rem 0.8rem;
+.panel-in {
+  animation: apm-slide-in 180ms ease-out;
 }
 
-.error {
-  color: #9b1c1c;
+@media (prefers-reduced-motion: reduce) {
+  .animate-in,
+  .panel-in {
+    animation: none;
+  }
+}
+
+.react-flow__node {
+  cursor: grab;
+}
+
+.react-flow__node.dragging {
+  cursor: grabbing;
+}
+
+.react-flow__attribution {
+  background: transparent;
+  color: var(--color-zinc-400);
 }

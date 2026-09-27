@@ -4,7 +4,7 @@ import { renderContext, type InterpretationContext } from "./context.js";
 import type { Interpreter } from "./process.js";
 import { proposalLimits, proposalSchema, type Proposal } from "./proposal.js";
 
-export const defaultOpenAiModel = "gpt-5-mini";
+export const defaultOpenAiModel = "gpt-5-nano";
 export const graphPromptVersion = "graph-v1";
 
 export const graphInstructions = `You maintain a project map for one software repository. The map groups work into features, and each feature holds work items.

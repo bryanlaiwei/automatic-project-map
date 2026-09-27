@@ -14,7 +14,7 @@ try {
 const { createApp } = await import("./app.js");
 const { verifySupabaseUser } = await import("./auth.js");
 const { getPool } = await import("./db.js");
-const { createGithubRepositoryAccessCheck } = await import("./github-app.js");
+const { createGithubAccountLookup, createGithubRepositoryAccessCheck } = await import("./github-app.js");
 const { createGithubEnricher } = await import("./github-enrich.js");
 
 const githubApp = {
@@ -28,6 +28,7 @@ const app = createApp({
   verifyUser: verifySupabaseUser,
   verifyRepositoryAccess: createGithubRepositoryAccessCheck(githubApp),
   github: createGithubEnricher(githubApp),
+  lookupGithubAccount: createGithubAccountLookup(githubApp),
 });
 
 const port = Number(process.env.API_PORT ?? 4000);

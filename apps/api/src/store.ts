@@ -41,11 +41,13 @@ export async function connectRepository(
   const client = await pool.connect();
   try {
     await client.query("begin");
+    // Each person owns at most one connected repository; being invited to someone else's does not count,
+    // and neither does the demo project, whose repository id is negative.
     const existing = await client.query<ProjectRow>(
       `select p.*
        from projects p
        join memberships m on m.workspace_id = p.workspace_id
-       where m.user_id = $1`,
+       where m.user_id = $1 and m.role = 'owner' and p.github_repo_id > 0`,
       [input.userId],
     );
     if ((existing.rowCount ?? 0) > 0) {
@@ -99,7 +101,8 @@ export async function listProjects(pool: Pool, userId: string): Promise<ProjectR
     `select p.*
      from projects p
      join memberships m on m.workspace_id = p.workspace_id
-     where m.user_id = $1`,
+     where m.user_id = $1
+     order by p.created_at, p.id`,
     [userId],
   );
   return result.rows;
