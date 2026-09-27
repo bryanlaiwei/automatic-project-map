@@ -20,7 +20,7 @@ export const createFeatureOperation = z.object({
 
 export const createWorkItemOperation = z.object({
   op: z.literal("create_work_item"),
-  ref: z.string(),
+  ref: z.string().describe('A new alias such as "new:reset-email-template".'),
   feature: z.string().describe("An F alias or the ref of a feature created earlier in this proposal."),
   title: z.string(),
   summary: z.string(),

@@ -1004,4 +1004,40 @@ describe("Day 3 interpretation and map maintenance", () => {
     expect(runRow.rows[0]?.url).toBe(`https://github.com/${owner}/repo/actions/runs/80001`);
     expect(runRow.rows[0]?.state.jobs.map((job) => job.name)).toEqual(["unit tests"]);
   });
+
+  it("accepts new refs spelled without new: and features without their own evidence, but not refs that shadow context aliases", async () => {
+    const project = await newProject("loose-refs", 18);
+    const ai = new ScriptedInterpreter();
+    await session(project, "codex", "codex-loose", 10, [["user", "Add dark mode to the settings page"]]);
+    ai.then((context) => ({
+      operations: [
+        { op: "create_feature", ref: "f-theming", title: "Theming", summary: "Look and feel.", evidence: [] },
+        { op: "create_work_item", ref: "w1", feature: "f-theming", title: "Dark mode toggle", summary: "Toggle in settings.", state: "in_progress", evidence: allEvidence(context) },
+      ],
+    }));
+    const first = await run(project, ai);
+    expect(first.interpretations).toMatchObject([{ status: "applied" }]);
+    const created = await onlyWorkItems(project);
+    expect(created.graph.features.map((feature) => feature.title)).toEqual(["Theming"]);
+    expect(created.items).toMatchObject([{ title: "Dark mode toggle", state: "in_progress" }]);
+
+    await session(project, "codex", "codex-loose", 20, [["user", "Also add a high-contrast theme"]]);
+    ai.then((context) => ({
+      operations: [
+        { op: "create_work_item", ref: "W1", feature: "F1", title: "Shadowing ref", summary: "", state: null, evidence: allEvidence(context) },
+        { op: "create_feature", ref: "lonely", title: "Unused feature", summary: "", evidence: [] },
+        { op: "create_work_item", ref: "new:contrast", feature: "F1", title: "High-contrast theme", summary: "", state: null, evidence: allEvidence(context) },
+      ],
+    }));
+    const second = await run(project, ai);
+    const outcomes = second.interpretations[0] && "outcomes" in second.interpretations[0] ? second.interpretations[0].outcomes : [];
+    expect(outcomes.map((entry) => (entry.status === "rejected" ? entry.reason : entry.status))).toEqual([
+      "invalid_ref:W1",
+      "feature_without_work_items",
+      "applied",
+    ]);
+    const after = await onlyWorkItems(project);
+    expect(after.graph.features.map((feature) => feature.title)).toEqual(["Theming"]);
+    expect(after.items.map((item) => item.title)).toEqual(["Dark mode toggle", "High-contrast theme"]);
+  });
 });
