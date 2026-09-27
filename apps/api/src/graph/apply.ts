@@ -172,19 +172,27 @@ class ProposalApplier {
     return state;
   }
 
+  /** Models spell refs for new records many ways ("new:x", "x", "w1"); any name works unless it is a context alias. */
+  private refKey(ref: string): string {
+    const trimmed = ref.trim();
+    return trimmed.startsWith("new:") ? trimmed : `new:${trimmed}`;
+  }
+
   private newRef(ref: string): string {
-    if (!ref.startsWith("new:") || ref.length <= 4) {
+    const trimmed = ref.trim();
+    const key = this.refKey(trimmed);
+    if (key === "new:" || this.evidence.has(trimmed) || this.workItemAliases.has(trimmed) || this.featureAliases.has(trimmed)) {
       throw new ReferenceMistake(`invalid_ref:${ref}`);
     }
-    if (this.created.has(ref)) {
+    if (this.created.has(key)) {
       throw new ReferenceMistake(`duplicate_ref:${ref}`);
     }
-    return ref;
+    return key;
   }
 
   private async resolveFeature(ref: string): Promise<FeatureRow> {
-    const createdRef = this.created.get(ref);
-    const rawId = createdRef?.kind === "feature" ? createdRef.id : this.featureAliases.get(ref);
+    const createdRef = this.created.get(this.refKey(ref));
+    const rawId = this.featureAliases.get(ref.trim()) ?? (createdRef?.kind === "feature" ? createdRef.id : undefined);
     if (!rawId) {
       throw new ReferenceMistake(`unknown_feature:${ref}`);
     }
@@ -203,8 +211,8 @@ class ProposalApplier {
   }
 
   private async resolveWorkItem(ref: string): Promise<WorkItemRow> {
-    const createdRef = this.created.get(ref);
-    const rawId = createdRef?.kind === "work_item" ? createdRef.id : this.workItemAliases.get(ref);
+    const createdRef = this.created.get(this.refKey(ref));
+    const rawId = this.workItemAliases.get(ref.trim()) ?? (createdRef?.kind === "work_item" ? createdRef.id : undefined);
     if (!rawId) {
       throw new ReferenceMistake(`unknown_work_item:${ref}`);
     }
@@ -226,7 +234,9 @@ class ProposalApplier {
 
   private async createFeature(operation: Extract<ProposalOperation, { op: "create_feature" }>, index: number): Promise<boolean> {
     const ref = this.newRef(operation.ref);
-    this.citedEvidence(operation.evidence);
+    if (operation.evidence.length > 0) {
+      this.citedEvidence(operation.evidence);
+    }
     const title = cleanTitle(operation.title);
     const result = await this.client.query<{ id: string }>(
       `insert into feature_groups (project_id, title, title_basis, summary, summary_basis)

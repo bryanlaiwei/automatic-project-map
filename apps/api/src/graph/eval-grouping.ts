@@ -169,13 +169,13 @@ async function store(
       const events = [
         {
           ...common,
-          eventId: `${fixture.sessionId}:started`,
+          eventId: `eval:${projectId}:${fixture.sessionId}:started`,
           occurredAt: createdAt,
           details: { kind: "session.started", sessionId: fixture.sessionId, createdAt, sourceVersion: "eval" },
         },
         {
           ...common,
-          eventId: `${fixture.sessionId}:content`,
+          eventId: `eval:${projectId}:${fixture.sessionId}:content`,
           occurredAt: tick(),
           details: {
             kind: "session.content_added",
@@ -197,7 +197,7 @@ async function store(
       const updatedAt = tick();
       const event: NormalizedEvent = {
         schemaVersion: SCHEMA_VERSION,
-        eventId: `eval:pull_request:${fixture.id}:${updatedAt}`,
+        eventId: `eval:${projectId}:pull_request:${fixture.id}:${updatedAt}`,
         sourceKey: `github:pull_request:${fixture.id}`,
         projectId,
         source: "github",
