@@ -3,7 +3,7 @@ import { applyProposal, type OperationOutcome } from "./apply.js";
 import { buildContext, contextLimits, type InterpretationContext } from "./context.js";
 import { applyFactsBatch, type FactsResult } from "./facts.js";
 import { ChangeSet, commitChanges, lockProject } from "./graph-store.js";
-import type { Proposal } from "./proposal.js";
+import { withoutNul, type Proposal } from "./proposal.js";
 
 export type Interpreter = {
   model: string;
@@ -14,7 +14,8 @@ export type Interpreter = {
 export const processingDefaults = {
   quietMs: 20_000,
   maxWaitMs: 60_000,
-  maxAttempts: 6,
+  /** Tries for evidence whose operations only named records the model was not shown. */
+  maxReferenceAttempts: 3,
   retryBaseMs: 30_000,
   retryMaxMs: 30 * 60_000,
   interpretationRounds: 10,
@@ -40,49 +41,61 @@ export type ProcessResult = {
   waitingEvidence: number;
 };
 
+/**
+ * Applies pending facts, then interprets ready evidence. Facts serialize on the project row and never wait
+ * behind a model call; interpretation is serialized per project by an advisory lock, and facts that arrive
+ * meanwhile are applied between rounds.
+ */
 export async function processProject(pool: Pool, projectId: string, options: ProcessOptions): Promise<ProcessResult> {
   const result: ProcessResult = { busy: false, facts: [], interpretations: [], waitingEvidence: 0 };
-  const lockClient = await pool.connect();
-  try {
-    const locked = await lockClient.query<{ locked: boolean }>(
-      `select pg_try_advisory_lock(hashtextextended($1, 0)) as locked`,
-      [`apm:project:${projectId}`],
-    );
-    if (!locked.rows[0]?.locked) {
-      return { ...result, busy: true };
-    }
+  result.facts.push(...(await applyPendingFacts(pool, projectId)));
+  if (options.interpreter) {
+    const lockClient = await pool.connect();
     try {
-      await abandonRunningBatches(pool, projectId);
-      for (;;) {
-        const facts = await inTransaction(pool, async (client) => {
-          const project = await lockProject(client, projectId);
-          return project ? applyFactsBatch(client, project) : null;
-        });
-        if (!facts) {
-          break;
-        }
-        result.facts.push(facts);
-      }
-      if (options.interpreter) {
-        for (let round = 0; round < processingDefaults.interpretationRounds; round += 1) {
-          const outcome = await interpretReadyEvidence(pool, projectId, options.interpreter, options);
-          if (!outcome) {
-            break;
+      const locked = await lockClient.query<{ locked: boolean }>(
+        `select pg_try_advisory_lock(hashtextextended($1, 0)) as locked`,
+        [`apm:project:${projectId}`],
+      );
+      if (!locked.rows[0]?.locked) {
+        result.busy = true;
+      } else {
+        try {
+          await abandonRunningBatches(pool, projectId);
+          for (let round = 0; round < processingDefaults.interpretationRounds; round += 1) {
+            const outcome = await interpretReadyEvidence(pool, projectId, options.interpreter, options);
+            if (!outcome) {
+              break;
+            }
+            result.interpretations.push(outcome);
+            result.facts.push(...(await applyPendingFacts(pool, projectId)));
+            if (outcome.status === "failed") {
+              break;
+            }
           }
-          result.interpretations.push(outcome);
-          if (outcome.status === "failed") {
-            break;
-          }
+        } finally {
+          await lockClient.query(`select pg_advisory_unlock(hashtextextended($1, 0))`, [`apm:project:${projectId}`]);
         }
       }
-      result.waitingEvidence = await countWaitingEvidence(pool, projectId);
     } finally {
-      await lockClient.query(`select pg_advisory_unlock(hashtextextended($1, 0))`, [`apm:project:${projectId}`]);
+      lockClient.release();
     }
-  } finally {
-    lockClient.release();
   }
+  result.waitingEvidence = await countWaitingEvidence(pool, projectId);
   return result;
+}
+
+async function applyPendingFacts(pool: Pool, projectId: string): Promise<FactsResult[]> {
+  const applied: FactsResult[] = [];
+  for (;;) {
+    const facts = await inTransaction(pool, async (client) => {
+      const project = await lockProject(client, projectId);
+      return project ? applyFactsBatch(client, project) : null;
+    });
+    if (!facts) {
+      return applied;
+    }
+    applied.push(facts);
+  }
 }
 
 /** Projects with facts to apply, or evidence whose batching window has closed. */
@@ -196,18 +209,55 @@ async function interpretReadyEvidence(
 
   let proposal: Proposal;
   try {
-    proposal = await interpreter.interpret(context);
+    proposal = withoutNul(await interpreter.interpret(context));
   } catch (error) {
-    const message = error instanceof Error ? error.message : "Interpretation failed.";
-    await recordFailure(pool, batchId, evidenceIds, message, options);
-    options.log?.(`interpretation failed for project ${projectId}: ${message}`);
-    return { batchId, status: "failed", evidence: evidenceIds.length, error: message };
+    return failed(pool, projectId, batchId, evidenceIds, error, options);
   }
 
+  try {
+    return await applyInterpretation(pool, projectId, batchId, evidenceIds, context, proposal, options);
+  } catch (error) {
+    // Anything other than a rejected operation rolled the apply back; count it as an attempt so it backs off.
+    return failed(pool, projectId, batchId, evidenceIds, error, options);
+  }
+}
+
+async function failed(
+  pool: Pool,
+  projectId: string,
+  batchId: string,
+  evidenceIds: string[],
+  error: unknown,
+  options: ProcessOptions,
+): Promise<InterpretationOutcome> {
+  const message = error instanceof Error ? error.message : "Interpretation failed.";
+  await recordFailure(pool, batchId, evidenceIds, message, options);
+  options.log?.(`interpretation failed for project ${projectId}: ${message}`);
+  return { batchId, status: "failed", evidence: evidenceIds.length, error: message };
+}
+
+async function applyInterpretation(
+  pool: Pool,
+  projectId: string,
+  batchId: string,
+  evidenceIds: string[],
+  context: InterpretationContext,
+  proposal: Proposal,
+  options: ProcessOptions,
+): Promise<InterpretationOutcome | null> {
   return inTransaction(pool, async (client) => {
     const project = await lockProject(client, projectId);
     if (!project) {
       return null;
+    }
+    if (!(await stillOwned(client, batchId, evidenceIds))) {
+      await client.query(
+        `update processing_batches
+         set status = 'failed', error = 'superseded: another run took over this evidence', proposal = $2::jsonb, completed_at = now()
+         where id = $1`,
+        [batchId, JSON.stringify(proposal)],
+      );
+      return { batchId, status: "superseded" as const, evidence: evidenceIds.length };
     }
     if (project.revision !== context.baseRevision && (await correctedSince(client, projectId, context))) {
       await client.query(
@@ -227,11 +277,27 @@ async function interpretReadyEvidence(
     const cited = [...applied.citedEvidenceIds];
     await client.query(
       `update evidence
-       set interpretation_state = case when id = any($2::uuid[]) then 'applied' else 'no_change' end,
-           interpretation_attempts = interpretation_attempts + 1,
-           retry_at = null
+       set interpretation_state = case
+             when id = any($2::uuid[]) then 'applied'
+             when id = any($3::uuid[]) and interpretation_attempts + 1 < $4 then 'failed'
+             else 'no_change'
+           end,
+           retry_at = case
+             when not (id = any($2::uuid[])) and id = any($3::uuid[]) and interpretation_attempts + 1 < $4
+               then $5::timestamptz + make_interval(secs => least($6::float8 * power(2, interpretation_attempts), $7::float8))
+             else null
+           end,
+           interpretation_attempts = interpretation_attempts + 1
        where id = any($1::uuid[])`,
-      [evidenceIds, cited],
+      [
+        evidenceIds,
+        cited,
+        [...applied.retryEvidenceIds],
+        processingDefaults.maxReferenceAttempts,
+        now(options).toISOString(),
+        processingDefaults.retryBaseMs / 1000,
+        processingDefaults.retryMaxMs / 1000,
+      ],
     );
     const status = revision === null ? "no_change" : "applied";
     const rejected = applied.outcomes.filter((outcome) => outcome.status === "rejected" || outcome.notes.length > 0);
@@ -243,6 +309,17 @@ async function interpretReadyEvidence(
     );
     return { batchId, status, revision, evidence: evidenceIds.length, outcomes: applied.outcomes };
   });
+}
+
+/** False when another run abandoned this batch or claimed its evidence, for example after this one lost its lock. */
+async function stillOwned(client: PoolClient, batchId: string, evidenceIds: string[]): Promise<boolean> {
+  const result = await client.query<{ running: boolean; owned: number }>(
+    `select (select status = 'running' from processing_batches where id = $1) as running,
+            (select count(*)::int from evidence where id = any($2::uuid[]) and interpretation_batch_id = $1) as owned`,
+    [batchId, evidenceIds],
+  );
+  const row = result.rows[0];
+  return row?.running === true && row.owned === evidenceIds.length;
 }
 
 /** True when a person changed a record the proposal was based on after its context was read. */
@@ -272,11 +349,9 @@ async function recordFailure(pool: Pool, batchId: string, evidenceIds: string[],
        returning id, interpretation_attempts`,
       [evidenceIds],
     );
+    // Failed analysis is never dropped; it keeps retrying at up to the longest delay.
     for (const row of rows.rows) {
-      const retryAt =
-        row.interpretation_attempts >= processingDefaults.maxAttempts
-          ? null
-          : new Date(now(options).getTime() + retryDelayMs(row.interpretation_attempts)).toISOString();
+      const retryAt = new Date(now(options).getTime() + retryDelayMs(row.interpretation_attempts)).toISOString();
       await client.query(`update evidence set retry_at = $2 where id = $1`, [row.id, retryAt]);
     }
   });

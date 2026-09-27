@@ -248,7 +248,8 @@ async function applyPullRequest(context: FactsContext, event: NormalizedEvent, d
   if (previous && incomingAt < previousAt && !(details.merged && !previous.merged)) {
     return;
   }
-  const merged = details.merged || (previous?.merged === true && incomingAt <= previousAt);
+  // GitHub never un-merges a pull request, so no later event can clear a merge.
+  const merged = details.merged || previous?.merged === true;
   const state = merged ? "closed" : details.state;
   const updatedAt = new Date(Math.max(incomingAt, previousAt)).toISOString();
   const next: PullRequestState = {
@@ -361,15 +362,17 @@ async function applyReview(context: FactsContext, details: Details<"pr.reviewed"
     return;
   }
   const previous = pullRequestStateSchema.parse(existing.state);
-  if (previous.reviews.some((review) => review.reviewId === details.reviewId)) {
+  const known = previous.reviews.find((review) => review.reviewId === details.reviewId);
+  // A dismissal is final, so a late delivery of the original approval cannot bring it back.
+  if (known && (known.decision === details.decision || known.decision === "dismissed")) {
     return;
   }
+  const review = { reviewId: details.reviewId, reviewer: details.reviewer, decision: details.decision, submittedAt: details.submittedAt };
   const next: PullRequestState = {
     ...previous,
-    reviews: [
-      ...previous.reviews,
-      { reviewId: details.reviewId, reviewer: details.reviewer, decision: details.decision, submittedAt: details.submittedAt },
-    ],
+    reviews: known
+      ? previous.reviews.map((item) => (item.reviewId === details.reviewId ? review : item))
+      : [...previous.reviews, review],
   };
   await context.client.query(`update artifacts set state = $2::jsonb where id = $1`, [existing.id, JSON.stringify(next)]);
   const linked = await linkedWorkItems(context, [existing.id]);
@@ -389,11 +392,11 @@ async function applyWorkflow(context: FactsContext, event: NormalizedEvent, deta
      values ($1, 'workflow_run', $2, null, $3, $4, $5::jsonb, $6)
      on conflict (project_id, kind, source_id) do update
        set head_sha = excluded.head_sha,
-           url = excluded.url,
+           url = case when $7::boolean then excluded.url else artifacts.url end,
            state = excluded.state,
            source_updated_at = greatest(artifacts.source_updated_at, excluded.source_updated_at)
      returning id`,
-    [context.projectId, sourceId, next.headSha, details.url, JSON.stringify(next), next.updatedAt],
+    [context.projectId, sourceId, next.headSha, details.url, JSON.stringify(next), next.updatedAt, details.jobId === null],
   );
   const artifactId = saved.rows[0]?.id;
   if (!artifactId) {
@@ -439,7 +442,7 @@ function mergeJob(previous: WorkflowRunState | null, details: Details<"workflow.
   }
   const job = {
     jobId: details.jobId ?? 0,
-    name: current?.name ?? "",
+    name: details.jobName ?? current?.name ?? "",
     status: details.status,
     conclusion: details.conclusion,
     attempt: details.attempt,

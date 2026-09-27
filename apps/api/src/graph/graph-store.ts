@@ -150,7 +150,7 @@ export async function recomputeWorkItemStates(
       next.state,
       next.basis,
     ]);
-    if (!quiet.has(row.id) && next.state !== row.state) {
+    if (!quiet.has(row.id)) {
       changes.add({
         entityKind: "work_item",
         entityId: row.id,

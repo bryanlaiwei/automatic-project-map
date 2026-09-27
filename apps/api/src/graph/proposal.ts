@@ -89,6 +89,24 @@ export const proposalSchema = z.object({
 });
 
 export type Proposal = z.infer<typeof proposalSchema>;
+
+/** Postgres cannot store NUL in text or jsonb, and the whole proposal is saved with its batch. */
+export function withoutNul(proposal: Proposal): Proposal {
+  return proposalSchema.parse(stripNul(proposal));
+}
+
+function stripNul(value: unknown): unknown {
+  if (typeof value === "string") {
+    return value.replaceAll("\u0000", "");
+  }
+  if (Array.isArray(value)) {
+    return value.map(stripNul);
+  }
+  if (typeof value === "object" && value !== null) {
+    return Object.fromEntries(Object.entries(value).map(([key, item]) => [key, stripNul(item)]));
+  }
+  return value;
+}
 export type ProposalOperation = z.infer<typeof proposalOperationSchema>;
 
 export const proposalLimits = {

@@ -47,17 +47,16 @@ export async function readGraph(pool: Pool, projectId: string): Promise<GraphVie
      order by r.created_at, r.id`,
     [projectId],
   );
-  const pending = await pool.query<{ count: string }>(
-    `select count(*) from evidence
-     where project_id = $1 and (interpretation_state = 'pending' or (interpretation_state = 'failed' and retry_at is not null))`,
-    [projectId],
-  );
   return {
     revision,
-    features: features.rows.map((feature) => {
+    features: features.rows.flatMap((feature) => {
       const workItems = items.rows
         .filter((item) => item.feature_id === feature.id)
         .map((item) => ({ id: item.id, title: item.title, state: item.state, stateBasis: item.state_basis, blocked: item.blocked }));
+      // The map shows observed work; a feature emptied by corrections keeps its id but is not drawn.
+      if (workItems.length === 0) {
+        return [];
+      }
       const counts: Partial<Record<WorkItemState, number>> = {};
       for (const state of workItemStates) {
         const count = workItems.filter((item) => item.state === state).length;
@@ -65,7 +64,7 @@ export async function readGraph(pool: Pool, projectId: string): Promise<GraphVie
           counts[state] = count;
         }
       }
-      return { id: feature.id, title: feature.title, summary: feature.summary, counts, workItems };
+      return [{ id: feature.id, title: feature.title, summary: feature.summary, counts, workItems }];
     }),
     relationships: relationships.rows.map((row) => ({
       id: row.id,
@@ -74,8 +73,21 @@ export async function readGraph(pool: Pool, projectId: string): Promise<GraphVie
       to: row.to_work_item_id,
       basis: row.basis,
     })),
-    pendingAnalysis: Number(pending.rows[0]?.count ?? 0),
+    pendingAnalysis: await pendingAnalysis(pool, projectId),
   };
+}
+
+/**
+ * Evidence still waiting for AI. It changes without a revision bump, so the cheap revision poll carries
+ * it too and a delay notice appears and clears on time.
+ */
+export async function pendingAnalysis(pool: Pool, projectId: string): Promise<number> {
+  const pending = await pool.query<{ count: string }>(
+    `select count(*) from evidence
+     where project_id = $1 and (interpretation_state = 'pending' or (interpretation_state = 'failed' and retry_at is not null))`,
+    [projectId],
+  );
+  return Number(pending.rows[0]?.count ?? 0);
 }
 
 async function resolve(pool: Pool, kind: "feature" | "work_item", id: string): Promise<string> {

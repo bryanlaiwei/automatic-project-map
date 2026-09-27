@@ -37,7 +37,9 @@ export function sessionExcerpts(messages: readonly SessionMessage[]): SessionExc
     if (text === "" || omittedOnly.test(text)) {
       continue;
     }
-    const line = `${message.role === "user" ? "User" : "Agent"} (${message.occurredAt}): ${truncate(text, excerptLimits.messageChars)}`;
+    // Continuation lines are indented so only a real role header starts a line; message text cannot pose as a request.
+    const body = truncate(text, excerptLimits.messageChars).replace(/\r\n|[\n\r\u2028\u2029]/g, "\n  ");
+    const line = `${message.role === "user" ? "User" : "Agent"} (${message.occurredAt}): ${body}`;
     if (
       current &&
       (current.lines.length >= excerptLimits.partMessages || current.chars + line.length > excerptLimits.partChars)

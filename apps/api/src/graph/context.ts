@@ -364,7 +364,7 @@ export function renderContext(context: InterpretationContext): string {
     lines.push("(none yet)");
   }
   for (const feature of context.features) {
-    lines.push(`${feature.alias}: ${feature.title}`, `  Summary: ${feature.summary}`);
+    lines.push(`${feature.alias}: ${inline(feature.title)}`, `  Summary: ${inline(feature.summary)}`);
   }
   lines.push("", "## Candidate work items");
   if (context.workItems.length === 0) {
@@ -372,9 +372,9 @@ export function renderContext(context: InterpretationContext): string {
   }
   for (const item of context.workItems) {
     lines.push(
-      `${item.alias} (in ${item.featureAlias}): ${item.title}`,
+      `${item.alias} (in ${item.featureAlias}): ${inline(item.title)}`,
       `  State: ${item.state}${item.blocked ? ", blocked" : ""}`,
-      `  Summary: ${item.summary}`,
+      `  Summary: ${inline(item.summary)}`,
       ...(item.pullRequests.length > 0 ? [`  Pull requests: ${item.pullRequests.map((number) => `#${number}`).join(", ")}`] : []),
       ...(item.sessions.length > 0 ? [`  Sessions: ${item.sessions.join(", ")}`] : []),
       `  Shown because: ${item.reasons.join("; ")}`,
@@ -402,7 +402,12 @@ export function renderContext(context: InterpretationContext): string {
   return lines.join("\n");
 }
 
-/** Keeps quoted source text from closing the tag it sits in. */
+/** Keeps quoted source text from opening or closing the tags that mark data. */
 function quoted(text: string): string {
-  return text.replace(/<\/(evidence|earlier)/gi, "< /$1");
+  return text.replace(/<(\/?)(evidence|earlier)/gi, "< $1$2");
+}
+
+/** Titles and summaries can repeat source text, so they get the same treatment and stay on one line. */
+function inline(text: string): string {
+  return quoted(text).replace(/\s+/g, " ").trim();
 }

@@ -260,6 +260,7 @@ function workflowJobEvent(input: {
       repositoryId: repoId,
       runId: job.run_id,
       jobId: job.id,
+      ...(typeof job.name === "string" ? { jobName: job.name } : {}),
       attempt: typeof job.run_attempt === "number" ? job.run_attempt : 1,
       status: typeof job.status === "string" ? job.status : "unknown",
       conclusion: typeof job.conclusion === "string" ? job.conclusion : null,

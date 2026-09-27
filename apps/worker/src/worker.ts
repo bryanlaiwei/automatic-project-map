@@ -21,9 +21,11 @@ export type ProjectProcessing = {
   pool: Pool;
   interpreter: Interpreter | null;
   dispatchEveryMs?: number;
+  concurrency?: number;
 };
 
 export const processProjectQueue = "process-project";
+const defaultProjectConcurrency = 3;
 
 export function backgroundJobs(input: { pool: Pool; github: GithubLookup }): WorkerJob[] {
   return [
@@ -77,15 +79,19 @@ export async function startWorker(input: {
     if (!(await boss.getQueue(processProjectQueue))) {
       await boss.createQueue(processProjectQueue, { name: processProjectQueue, policy: "stately" });
     }
-    await boss.work<{ projectId: string }>(processProjectQueue, { pollingIntervalSeconds: 1 }, async (jobs) => {
-      for (const job of jobs) {
-        const result = await processProject(processing.pool, job.data.projectId, { interpreter: processing.interpreter, log });
-        const summary = describeProcessing(result);
-        if (summary) {
-          log(`${processProjectQueue} ${job.data.projectId}: ${summary}`);
+    // Each project has at most one active job (stately, keyed by project), so these workers only run
+    // different projects side by side; one project's model calls do not hold up another's facts.
+    for (let slot = 0; slot < (processing.concurrency ?? defaultProjectConcurrency); slot += 1) {
+      await boss.work<{ projectId: string }>(processProjectQueue, { pollingIntervalSeconds: 1 }, async (jobs) => {
+        for (const job of jobs) {
+          const result = await processProject(processing.pool, job.data.projectId, { interpreter: processing.interpreter, log });
+          const summary = describeProcessing(result);
+          if (summary) {
+            log(`${processProjectQueue} ${job.data.projectId}: ${summary}`);
+          }
         }
-      }
-    });
+      });
+    }
     dispatch = async () => {
       const projects = await dueProjects(processing.pool, { includeInterpretation: processing.interpreter !== null });
       for (const projectId of projects) {
@@ -120,9 +126,6 @@ export async function startWorker(input: {
 }
 
 export function describeProcessing(result: ProcessResult): string | null {
-  if (result.busy) {
-    return null;
-  }
   const parts: string[] = [];
   const applied = result.facts.reduce((sum, batch) => sum + batch.applied, 0);
   const invalid = result.facts.reduce((sum, batch) => sum + batch.invalid, 0);

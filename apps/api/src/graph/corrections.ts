@@ -177,11 +177,18 @@ async function mergeWorkItems(scope: Scope, retiredRaw: string, survivingRaw: st
     throw new CorrectionError("invalid", "A work item cannot be merged into itself.");
   }
   const { client } = scope;
+  // A merge is a person saying these belong together, so it lifts earlier split blocks on what it brings over.
+  await client.query(
+    `delete from link_blocks b
+     where b.work_item_id = $2
+       and ((b.target_kind = 'evidence' and b.target_id in (select evidence_id from work_item_evidence where work_item_id = $1))
+         or (b.target_kind = 'artifact' and b.target_id in (select artifact_id from work_item_artifacts where work_item_id = $1)))`,
+    [retired.id, surviving.id],
+  );
   await client.query(
     `insert into work_item_evidence (work_item_id, evidence_id, basis)
      select $2, we.evidence_id, we.basis from work_item_evidence we
      where we.work_item_id = $1
-       and not exists (select 1 from link_blocks b where b.work_item_id = $2 and b.target_kind = 'evidence' and b.target_id = we.evidence_id)
      on conflict do nothing`,
     [retired.id, surviving.id],
   );
@@ -189,7 +196,6 @@ async function mergeWorkItems(scope: Scope, retiredRaw: string, survivingRaw: st
     `insert into work_item_artifacts (work_item_id, artifact_id, basis, evidence_ids)
      select $2, wa.artifact_id, wa.basis, wa.evidence_ids from work_item_artifacts wa
      where wa.work_item_id = $1
-       and not exists (select 1 from link_blocks b where b.work_item_id = $2 and b.target_kind = 'artifact' and b.target_id = wa.artifact_id)
      on conflict do nothing`,
     [retired.id, surviving.id],
   );
@@ -197,7 +203,10 @@ async function mergeWorkItems(scope: Scope, retiredRaw: string, survivingRaw: st
   await client.query(`delete from work_item_artifacts where work_item_id = $1`, [retired.id]);
   await client.query(
     `insert into link_blocks (work_item_id, target_kind, target_id, correction_id)
-     select $2, target_kind, target_id, correction_id from link_blocks where work_item_id = $1
+     select $2, b.target_kind, b.target_id, b.correction_id from link_blocks b
+     where b.work_item_id = $1
+       and not exists (select 1 from work_item_evidence we where b.target_kind = 'evidence' and we.work_item_id = $2 and we.evidence_id = b.target_id)
+       and not exists (select 1 from work_item_artifacts wa where b.target_kind = 'artifact' and wa.work_item_id = $2 and wa.artifact_id = b.target_id)
      on conflict do nothing`,
     [retired.id, surviving.id],
   );
@@ -253,7 +262,7 @@ async function mergeFeatures(scope: Scope, retiredRaw: string, survivingRaw: str
     throw new CorrectionError("invalid", "A feature cannot be merged into itself.");
   }
   const moved = await scope.client.query<{ id: string }>(
-    `update work_items set feature_id = $2, updated_at = now()
+    `update work_items set feature_id = $2, feature_basis = 'human', updated_at = now()
      where feature_id = $1 and retired_into is null
      returning id`,
     [retired.id, surviving.id],

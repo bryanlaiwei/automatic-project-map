@@ -72,6 +72,7 @@ export function visibleWorkflowRun(state: WorkflowRunState) {
     status: state.status,
     conclusion: state.conclusion,
     attempt: state.attempt,
+    attempts: state.attempts.map((attempt) => `${attempt.attempt}:${attempt.status}:${attempt.conclusion ?? ""}`),
     jobs: state.jobs.map((job) => `${job.name}:${job.attempt}:${job.status}:${job.conclusion ?? ""}`),
   };
 }

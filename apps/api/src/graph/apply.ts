@@ -11,6 +11,8 @@ export type OperationOutcome =
 export type ApplyResult = {
   outcomes: OperationOutcome[];
   citedEvidenceIds: Set<string>;
+  /** Evidence whose only operations named something the model was not shown; worth another try. */
+  retryEvidenceIds: Set<string>;
 };
 
 type WorkItemRow = {
@@ -38,6 +40,9 @@ type FeatureRow = {
 
 class Rejected extends Error {}
 
+/** The model referred to something that is not in its context, as opposed to a rule or a person's decision. */
+class ReferenceMistake extends Rejected {}
+
 /**
  * Checks each proposed operation against the current records and applies the valid ones. A rejected
  * operation leaves no partial writes. Model text never chooses ids: every reference is an alias from the
@@ -62,6 +67,7 @@ class ProposalApplier {
   private readonly createdWorkItems = new Set<string>();
   private readonly touched = new Set<string>();
   private readonly cited = new Set<string>();
+  private readonly retry = new Set<string>();
 
   constructor(
     private readonly client: PoolClient,
@@ -99,13 +105,25 @@ class ProposalApplier {
           throw error;
         }
         outcomes.push({ index, op: operation.op, status: "rejected", reason: error.message });
+        if (error instanceof ReferenceMistake) {
+          for (const alias of operation.evidence) {
+            const item = this.evidence.get(alias);
+            if (item) {
+              this.retry.add(item.id);
+            }
+          }
+        }
       }
     }
 
     await this.dropEmptyFeatures(outcomes);
     await recomputeWorkItemStates(this.client, this.touched, this.changes, this.createdWorkItems);
     await this.recordCreatedWorkItems();
-    return { outcomes, citedEvidenceIds: this.cited };
+    return {
+      outcomes,
+      citedEvidenceIds: this.cited,
+      retryEvidenceIds: new Set([...this.retry].filter((id) => !this.cited.has(id))),
+    };
   }
 
   private async apply(operation: ProposalOperation, index: number, notes: string[]): Promise<boolean> {
@@ -140,7 +158,7 @@ class ProposalApplier {
     return [...new Set(aliases)].map((alias) => {
       const item = this.evidence.get(alias);
       if (!item) {
-        throw new Rejected(`unknown_evidence:${alias}`);
+        throw new ReferenceMistake(`unknown_evidence:${alias}`);
       }
       return item;
     });
@@ -156,10 +174,10 @@ class ProposalApplier {
 
   private newRef(ref: string): string {
     if (!ref.startsWith("new:") || ref.length <= 4) {
-      throw new Rejected(`invalid_ref:${ref}`);
+      throw new ReferenceMistake(`invalid_ref:${ref}`);
     }
     if (this.created.has(ref)) {
-      throw new Rejected(`duplicate_ref:${ref}`);
+      throw new ReferenceMistake(`duplicate_ref:${ref}`);
     }
     return ref;
   }
@@ -168,7 +186,7 @@ class ProposalApplier {
     const createdRef = this.created.get(ref);
     const rawId = createdRef?.kind === "feature" ? createdRef.id : this.featureAliases.get(ref);
     if (!rawId) {
-      throw new Rejected(`unknown_feature:${ref}`);
+      throw new ReferenceMistake(`unknown_feature:${ref}`);
     }
     const id = await resolveAlias(this.client, "feature", rawId);
     const result = await this.client.query<FeatureRow>(
@@ -188,7 +206,7 @@ class ProposalApplier {
     const createdRef = this.created.get(ref);
     const rawId = createdRef?.kind === "work_item" ? createdRef.id : this.workItemAliases.get(ref);
     if (!rawId) {
-      throw new Rejected(`unknown_work_item:${ref}`);
+      throw new ReferenceMistake(`unknown_work_item:${ref}`);
     }
     const id = await resolveAlias(this.client, "work_item", rawId);
     const result = await this.client.query<WorkItemRow>(

@@ -2,7 +2,7 @@ import { Router, type Request, type Response } from "express";
 import type { Pool } from "pg";
 import { z } from "zod";
 import { applyCorrection, correctionSchema } from "./corrections.js";
-import { readFeature, readGraph, readRevision, readWorkItem } from "./graph-read.js";
+import { pendingAnalysis, readFeature, readGraph, readRevision, readWorkItem } from "./graph-read.js";
 
 export type ProjectAccess = (req: Request, res: Response) => Promise<{ userId: string; projectId: string } | null>;
 
@@ -25,7 +25,7 @@ export function graphRouter(input: { pool: Pool; access: ProjectAccess }): Route
     if (!allowed) {
       return;
     }
-    res.json({ revision: await readRevision(pool, allowed.projectId) });
+    res.json({ revision: await readRevision(pool, allowed.projectId), pendingAnalysis: await pendingAnalysis(pool, allowed.projectId) });
   });
 
   router.get("/projects/:projectId/work-items/:workItemId", async (req, res) => {

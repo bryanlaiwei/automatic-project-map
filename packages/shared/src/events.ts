@@ -59,6 +59,7 @@ export const workflowUpdatedDetailsSchema = z.object({
   repositoryId: z.number().int(),
   runId: z.number().int(),
   jobId: z.number().int().nullable(),
+  jobName: z.string().optional(),
   attempt: z.number().int(),
   status: z.string().min(1),
   conclusion: z.string().nullable(),
