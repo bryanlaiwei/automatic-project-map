@@ -3,7 +3,7 @@ import type { Pool } from "pg";
 import { z } from "zod";
 import { SCHEMA_VERSION, SESSION_CHUNK_REQUEST_LIMIT_BYTES, sessionAgentSchema } from "@apm/shared";
 import type { AuthUser } from "./auth.js";
-import type { RepositoryAccessCheck } from "./github-app.js";
+import type { GithubAccountLookup, RepositoryAccessCheck } from "./github-app.js";
 import { verifyGithubSignature } from "./github.js";
 import { createPairingCode, exchangePairingCode, findCollectorDevice, revokeCollectorToken } from "./collector-tokens.js";
 import { graphRouter } from "./graph/routes.js";
@@ -52,6 +52,7 @@ export type AppDeps = {
   verifyUser: (token: string) => Promise<AuthUser | null>;
   verifyRepositoryAccess: RepositoryAccessCheck;
   github?: GithubLookup;
+  lookupGithubAccount?: GithubAccountLookup;
 };
 
 const ingestBody = z.object({
@@ -222,7 +223,7 @@ export function createApp(deps: AppDeps) {
       const message =
         result.error === "repo_taken"
           ? "This repository is already connected."
-          : "This account already has a connected repository.";
+          : "You already own a connected repository.";
       res.status(409).json({ error: message });
       return;
     }
@@ -276,6 +277,7 @@ export function createApp(deps: AppDeps) {
       pool: deps.pool,
       authenticate: (req, res) => requireUser(deps, req, res),
       member: (req, res) => projectMember(deps, req, res),
+      lookupGithubAccount: deps.lookupGithubAccount,
     }),
   );
 

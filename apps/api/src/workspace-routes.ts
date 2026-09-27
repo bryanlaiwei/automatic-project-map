@@ -2,12 +2,14 @@ import { Router, type Request, type Response } from "express";
 import type { Pool } from "pg";
 import { z } from "zod";
 import type { AuthUser } from "./auth.js";
+import type { GithubAccountLookup } from "./github-app.js";
 import {
   acceptInvitation,
   deleteProject,
   githubLoginPattern,
   inviteMember,
   listPendingInvitations,
+  projectRepository,
   readLayout,
   readSettings,
   removeMember,
@@ -38,9 +40,10 @@ export function workspaceRouter(input: {
   pool: Pool;
   authenticate: (req: Request, res: Response) => Promise<AuthUser | null>;
   member: MemberAccess;
+  lookupGithubAccount?: GithubAccountLookup | undefined;
 }): Router {
   const router = Router();
-  const { pool, authenticate, member } = input;
+  const { pool, authenticate, member, lookupGithubAccount } = input;
 
   async function owner(req: Request, res: Response) {
     const allowed = await member(req, res);
@@ -59,7 +62,7 @@ export function workspaceRouter(input: {
     await saveProfile(pool, user);
     res.json({
       user: { id: user.id, githubLogin: user.githubLogin ?? null, name: user.name ?? null, avatarUrl: user.avatarUrl ?? null },
-      invitations: await listPendingInvitations(pool, user.githubLogin),
+      invitations: await listPendingInvitations(pool, user),
     });
   });
 
@@ -106,16 +109,41 @@ export function workspaceRouter(input: {
       res.status(400).json({ error: "Enter a GitHub username." });
       return;
     }
-    const result = await inviteMember(pool, { projectId: allowed.projectId, invitedBy: allowed.user.id, githubLogin: parsed.data.githubLogin });
+    const repository = await projectRepository(pool, allowed.projectId);
+    if (!lookupGithubAccount || !repository) {
+      res.status(503).json({ error: "Inviting needs the GitHub App to look up the account. Set GITHUB_APP_ID and GITHUB_APP_PRIVATE_KEY." });
+      return;
+    }
+    const account = await lookupGithubAccount({ ...repository, login: parsed.data.githubLogin });
+    switch (account.status) {
+      case "found":
+        break;
+      case "not_found":
+        res.status(400).json({ error: `There is no GitHub user named @${parsed.data.githubLogin}.` });
+        return;
+      case "unavailable":
+        res.status(503).json({ error: account.message });
+        return;
+      default: {
+        const unhandled: never = account;
+        throw new Error(`Unhandled account lookup ${JSON.stringify(unhandled)}`);
+      }
+    }
+    const result = await inviteMember(pool, {
+      projectId: allowed.projectId,
+      invitedBy: allowed.user.id,
+      githubLogin: account.login,
+      githubUserId: account.id,
+    });
     switch (result.status) {
       case "invited":
         res.status(201).json({ id: result.id });
         return;
       case "already_member":
-        res.status(409).json({ error: `@${parsed.data.githubLogin} is already a member.` });
+        res.status(409).json({ error: `@${account.login} is already a member.` });
         return;
       case "already_invited":
-        res.status(409).json({ error: `@${parsed.data.githubLogin} already has an open invitation.` });
+        res.status(409).json({ error: `@${account.login} already has an open invitation.` });
         return;
       default: {
         const unhandled: never = result;

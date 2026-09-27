@@ -1,4 +1,4 @@
-import { ChevronDown, CircleAlert, LoaderCircle, LogOut, Mail, Settings, WifiOff } from "lucide-react";
+import { ChevronDown, CircleAlert, LoaderCircle, LogOut, Mail, Plus, Settings, WifiOff } from "lucide-react";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { ApiError, api, errorMessage, type Graph, type Me, type Project } from "../api";
 import { timeAgo } from "../format";
@@ -52,6 +52,7 @@ export function Workspace({
   onJoined,
   onSignOut,
   onProjectGone,
+  onConnectRepository,
 }: {
   token: string;
   me: Me["user"];
@@ -62,6 +63,8 @@ export function Workspace({
   onJoined: (projectId: string) => void;
   onSignOut: () => void;
   onProjectGone: () => void;
+  /** Set when the person does not own a connected repository yet. */
+  onConnectRepository?: (() => void) | undefined;
 }) {
   const toast = useToast();
   const now = useNow();
@@ -383,7 +386,10 @@ export function Workspace({
                 )}
               </button>
             )}
-            items={[{ label: `Sign out${me.githubLogin ? ` @${me.githubLogin}` : ""}`, icon: <LogOut className="size-4" />, onSelect: onSignOut }]}
+            items={[
+              ...(onConnectRepository ? [{ label: "Connect your own repository", icon: <Plus className="size-4" />, onSelect: onConnectRepository }] : []),
+              { label: `Sign out${me.githubLogin ? ` @${me.githubLogin}` : ""}`, icon: <LogOut className="size-4" />, onSelect: onSignOut },
+            ]}
           />
         </div>
       </header>

@@ -1,4 +1,4 @@
-import { ArrowRight, LogOut, Mail } from "lucide-react";
+import { ArrowLeft, ArrowRight, LogOut, Mail } from "lucide-react";
 import { useState, type FormEvent } from "react";
 import { api, errorMessage, type Me } from "../api";
 import { parseRepository } from "../format";
@@ -14,12 +14,15 @@ export function Onboarding({
   onConnected,
   onJoined,
   onSignOut,
+  onCancel,
 }: {
   token: string;
   me: Me;
   onConnected: (projectId: string) => void;
   onJoined: (projectId: string) => void;
   onSignOut: () => void;
+  /** Set when the person already has a map to go back to. */
+  onCancel?: (() => void) | undefined;
 }) {
   const [repository, setRepository] = useState("");
   const [busy, setBusy] = useState(false);
@@ -74,8 +77,18 @@ export function Onboarding({
       </header>
 
       <main className="mx-auto max-w-xl px-4 pt-10 pb-20">
-        <h1 className="text-2xl font-semibold tracking-tight text-zinc-900">Set up your project map</h1>
-        <p className="mt-2 text-[15px] text-zinc-600">Connect one GitHub repository, or join a teammate’s project.</p>
+        {onCancel ? (
+          <button type="button" onClick={onCancel} className="mb-6 inline-flex items-center gap-1.5 text-sm font-medium text-zinc-500 hover:text-zinc-800">
+            <ArrowLeft className="size-4" />
+            Back to the map
+          </button>
+        ) : null}
+        <h1 className="text-2xl font-semibold tracking-tight text-zinc-900">{onCancel ? "Connect your own repository" : "Set up your project map"}</h1>
+        <p className="mt-2 text-[15px] text-zinc-600">
+          {onCancel
+            ? "It gets its own map. The projects you were invited to stay as they are."
+            : "Connect one GitHub repository, or join a teammate’s project."}
+        </p>
 
         {me.invitations.length > 0 ? (
           <section className="mt-8 space-y-2">

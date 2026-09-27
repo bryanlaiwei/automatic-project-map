@@ -1,6 +1,8 @@
 export type AuthUser = {
   id: string;
   githubLogin?: string | null;
+  /** GitHub's numeric account id, as a decimal string. Unlike the login, it never changes hands. */
+  githubId?: string | null;
   name?: string | null;
   avatarUrl?: string | null;
 };
@@ -26,9 +28,11 @@ export async function verifySupabaseUser(token: string): Promise<AuthUser | null
     return null;
   }
   const github = githubIdentity(body);
+  const githubId = github ? (text(github, "provider_id") ?? text(github, "sub")) : null;
   return {
     id: body.id,
     githubLogin: github ? (text(github, "user_name") ?? text(github, "preferred_username")) : null,
+    githubId: githubId !== null && /^\d+$/.test(githubId) ? githubId : null,
     name: github ? (text(github, "full_name") ?? text(github, "name")) : null,
     avatarUrl: github ? text(github, "avatar_url") : null,
   };

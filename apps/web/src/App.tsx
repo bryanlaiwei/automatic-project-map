@@ -17,6 +17,7 @@ function AppContent() {
   const [account, setAccount] = useState<Account | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [projectId, setProjectId] = useState<string | null>(() => window.localStorage.getItem(projectKey));
+  const [connecting, setConnecting] = useState(false);
   const token = session?.access_token ?? null;
 
   useEffect(() => {
@@ -109,23 +110,24 @@ function AppContent() {
   }
 
   const project = account.projects.find((entry) => entry.id === projectId) ?? account.projects[0];
-  if (!project) {
+  const openProject = (id: string) => {
+    setConnecting(false);
+    chooseProject(id);
+    void loadAccount();
+  };
+  if (!project || connecting) {
     return (
       <Onboarding
         token={token}
         me={account.me}
-        onConnected={(id) => {
-          chooseProject(id);
-          void loadAccount();
-        }}
-        onJoined={(id) => {
-          chooseProject(id);
-          void loadAccount();
-        }}
+        onConnected={openProject}
+        onJoined={openProject}
         onSignOut={() => void signOut()}
+        onCancel={project ? () => setConnecting(false) : undefined}
       />
     );
   }
+  const ownsRepository = account.projects.some((entry) => entry.role === "owner" && entry.repoId > 0);
   return (
     <Workspace
       key={project.id}
@@ -135,12 +137,10 @@ function AppContent() {
       project={project}
       projects={account.projects}
       onSwitchProject={chooseProject}
-      onJoined={(id) => {
-        chooseProject(id);
-        void loadAccount();
-      }}
+      onJoined={openProject}
       onSignOut={() => void signOut()}
       onProjectGone={projectGone}
+      onConnectRepository={ownsRepository ? undefined : () => setConnecting(true)}
     />
   );
 }

@@ -1,6 +1,6 @@
 import { generateKeyPairSync } from "node:crypto";
 import { describe, expect, it } from "vitest";
-import { createGithubRepositoryAccessCheck } from "./github-app.js";
+import { createGithubAccountLookup, createGithubRepositoryAccessCheck } from "./github-app.js";
 
 const { privateKey } = generateKeyPairSync("rsa", {
   modulusLength: 2048,
@@ -92,6 +92,32 @@ describe("GitHub App repository check", () => {
     await expect(check({ owner: "acme", name: "app", login: "reader" })).resolves.toMatchObject({ status: "not_permitted" });
     await expect(check({ owner: "acme", name: "app", login: "stranger" })).resolves.toMatchObject({ status: "not_permitted" });
     await expect(check({ owner: "acme", name: "app", login: null })).resolves.toMatchObject({ status: "not_permitted" });
+  });
+
+  it("looks up people by username and refuses organizations and unknown names", async () => {
+    const lookup = createGithubAccountLookup({
+      appId: "12345",
+      privateKey: privateKey,
+      fetchImpl: async (input) => {
+        const url = String(input);
+        if (url.endsWith("/installation")) {
+          return jsonResponse(200, { id: 77 });
+        }
+        if (url.endsWith("/access_tokens")) {
+          return jsonResponse(201, { token: "ghs_test" });
+        }
+        if (url.endsWith("/users/octo")) {
+          return jsonResponse(200, { id: 583231, login: "Octo", type: "User" });
+        }
+        if (url.endsWith("/users/acme")) {
+          return jsonResponse(200, { id: 9, login: "acme", type: "Organization" });
+        }
+        return jsonResponse(404, { message: "Not Found" });
+      },
+    });
+    await expect(lookup({ owner: "acme", name: "app", login: "octo" })).resolves.toEqual({ status: "found", id: 583231, login: "Octo" });
+    await expect(lookup({ owner: "acme", name: "app", login: "acme" })).resolves.toEqual({ status: "not_found" });
+    await expect(lookup({ owner: "acme", name: "app", login: "nobody" })).resolves.toEqual({ status: "not_found" });
   });
 
   it("denies a repository the App is not installed on", async () => {

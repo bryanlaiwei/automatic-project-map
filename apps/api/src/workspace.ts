@@ -41,19 +41,26 @@ export const githubLoginPattern = /^[a-z\d](?:[a-z\d]|-(?=[a-z\d])){0,38}$/i;
 
 /** Remembers how a signed-in person appears on GitHub. Skipped when the token carried no GitHub identity. */
 export async function saveProfile(pool: Pool, user: AuthUser): Promise<void> {
-  if (!user.githubLogin && !user.name && !user.avatarUrl) {
+  if (!user.githubLogin && !user.githubId && !user.name && !user.avatarUrl) {
     return;
   }
   await pool.query(
-    `insert into profiles (user_id, github_login, display_name, avatar_url, updated_at)
-     values ($1, $2, $3, $4, now())
+    `insert into profiles (user_id, github_login, github_user_id, display_name, avatar_url, updated_at)
+     values ($1, $2, $3, $4, $5, now())
      on conflict (user_id) do update
        set github_login = excluded.github_login,
+           github_user_id = excluded.github_user_id,
            display_name = excluded.display_name,
            avatar_url = excluded.avatar_url,
            updated_at = now()`,
-    [user.id, user.githubLogin ?? null, user.name ?? null, user.avatarUrl ?? null],
+    [user.id, user.githubLogin ?? null, user.githubId ?? null, user.name ?? null, user.avatarUrl ?? null],
   );
+}
+
+export async function projectRepository(pool: Pool, projectId: string): Promise<{ owner: string; name: string } | null> {
+  const result = await pool.query<{ github_owner: string; github_name: string }>(`select github_owner, github_name from projects where id = $1`, [projectId]);
+  const row = result.rows[0];
+  return row ? { owner: row.github_owner, name: row.github_name } : null;
 }
 
 export async function projectRole(pool: Pool, userId: string, projectId: string): Promise<Role | null> {
@@ -76,8 +83,19 @@ export async function listProjectRoles(pool: Pool, userId: string): Promise<Map<
   return new Map(result.rows.map((row) => [row.id, row.role]));
 }
 
-export async function listPendingInvitations(pool: Pool, githubLogin: string | null | undefined): Promise<PendingInvitation[]> {
-  if (!githubLogin) {
+/**
+ * Invitations name a GitHub account by its numeric id. Ones created before ids were recorded have none and
+ * still match on the login.
+ */
+function invitedAccount(invitation: { github_user_id: string | null; github_login: string }, user: AuthUser): boolean {
+  if (invitation.github_user_id !== null) {
+    return user.githubId === invitation.github_user_id;
+  }
+  return Boolean(user.githubLogin) && user.githubLogin?.toLowerCase() === invitation.github_login.toLowerCase();
+}
+
+export async function listPendingInvitations(pool: Pool, user: AuthUser): Promise<PendingInvitation[]> {
+  if (!user.githubLogin && !user.githubId) {
     return [];
   }
   const result = await pool.query<{ id: string; project_id: string; github_owner: string; github_name: string; invited_by: string | null; created_at: Date }>(
@@ -85,9 +103,10 @@ export async function listPendingInvitations(pool: Pool, githubLogin: string | n
      from invitations i
      join projects p on p.workspace_id = i.workspace_id
      left join profiles pr on pr.user_id = i.invited_by
-     where lower(i.github_login) = lower($1) and i.accepted_at is null and i.revoked_at is null
+     where i.accepted_at is null and i.revoked_at is null
+       and (i.github_user_id = $2::bigint or (i.github_user_id is null and lower(i.github_login) = lower($1)))
      order by i.created_at`,
-    [githubLogin],
+    [user.githubLogin ?? null, user.githubId ?? null],
   );
   return result.rows.map((row) => ({
     id: row.id,
@@ -102,8 +121,8 @@ export async function acceptInvitation(
   input: { invitationId: string; user: AuthUser },
 ): Promise<{ status: "joined"; projectId: string } | { status: "not_found" | "wrong_account" }> {
   return inTransaction(pool, async (client) => {
-    const found = await client.query<{ workspace_id: string; github_login: string; role: Role; project_id: string }>(
-      `select i.workspace_id, i.github_login, i.role, p.id as project_id
+    const found = await client.query<{ workspace_id: string; github_login: string; github_user_id: string | null; role: Role; project_id: string }>(
+      `select i.workspace_id, i.github_login, i.github_user_id::text as github_user_id, i.role, p.id as project_id
        from invitations i
        join projects p on p.workspace_id = i.workspace_id
        where i.id = $1 and i.accepted_at is null and i.revoked_at is null
@@ -114,7 +133,7 @@ export async function acceptInvitation(
     if (!row) {
       return { status: "not_found" as const };
     }
-    if (!input.user.githubLogin || input.user.githubLogin.toLowerCase() !== row.github_login.toLowerCase()) {
+    if (!invitedAccount(row, input.user)) {
       return { status: "wrong_account" as const };
     }
     await client.query(
@@ -127,9 +146,10 @@ export async function acceptInvitation(
   });
 }
 
+/** `githubLogin` and `githubUserId` are the account as GitHub reported it when the invitation was made. */
 export async function inviteMember(
   pool: Pool,
-  input: { projectId: string; invitedBy: string; githubLogin: string },
+  input: { projectId: string; invitedBy: string; githubLogin: string; githubUserId: number },
 ): Promise<{ status: "invited"; id: string } | { status: "already_member" | "already_invited" }> {
   return inTransaction(pool, async (client) => {
     const project = await client.query<{ workspace_id: string }>(`select workspace_id from projects where id = $1 for update`, [input.projectId]);
@@ -139,17 +159,17 @@ export async function inviteMember(
     }
     const member = await client.query(
       `select 1 from memberships m join profiles p on p.user_id = m.user_id
-       where m.workspace_id = $1 and lower(p.github_login) = lower($2)`,
-      [workspaceId, input.githubLogin],
+       where m.workspace_id = $1 and (p.github_user_id = $3 or (p.github_user_id is null and lower(p.github_login) = lower($2)))`,
+      [workspaceId, input.githubLogin, input.githubUserId],
     );
     if ((member.rowCount ?? 0) > 0) {
       return { status: "already_member" as const };
     }
     const inserted = await client.query<{ id: string }>(
-      `insert into invitations (workspace_id, github_login, invited_by) values ($1, $2, $3)
+      `insert into invitations (workspace_id, github_login, github_user_id, invited_by) values ($1, $2, $3, $4)
        on conflict do nothing
        returning id`,
-      [workspaceId, input.githubLogin, input.invitedBy],
+      [workspaceId, input.githubLogin, input.githubUserId, input.invitedBy],
     );
     const id = inserted.rows[0]?.id;
     return id ? { status: "invited" as const, id } : { status: "already_invited" as const };

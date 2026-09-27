@@ -9,11 +9,24 @@ loadEnvFile();
 
 const pool = getPool();
 const people: Record<string, AuthUser> = {
-  owner: { id: "d4000000-0000-4000-8000-000000000001", githubLogin: "day4-owner", name: "Day Four", avatarUrl: null },
-  mate: { id: "d4000000-0000-4000-8000-000000000002", githubLogin: "Day4-Mate", name: null, avatarUrl: null },
-  stranger: { id: "d4000000-0000-4000-8000-000000000003", githubLogin: "day4-stranger", name: null, avatarUrl: null },
+  owner: { id: "d4000000-0000-4000-8000-000000000001", githubLogin: "day4-owner", githubId: "4001", name: "Day Four", avatarUrl: null },
+  mate: { id: "d4000000-0000-4000-8000-000000000002", githubLogin: "Day4-Mate", githubId: "4002", name: null, avatarUrl: null },
+  stranger: { id: "d4000000-0000-4000-8000-000000000003", githubLogin: "day4-stranger", githubId: "4003", name: null, avatarUrl: null },
+  // Invited as day4-renamer, then renamed the account on GitHub.
+  renamed: { id: "d4000000-0000-4000-8000-000000000004", githubLogin: "day4-renamed", githubId: "4005", name: null, avatarUrl: null },
+  // A different account that took the old day4-renamer login afterwards.
+  squatter: { id: "d4000000-0000-4000-8000-000000000005", githubLogin: "day4-renamer", githubId: "4999", name: null, avatarUrl: null },
 };
-const repoId = 88_005_001;
+const githubAccounts: Record<string, { id: number; login: string }> = {
+  "day4-owner": { id: 4001, login: "day4-owner" },
+  "day4-mate": { id: 4002, login: "Day4-Mate" },
+  "day4-stranger": { id: 4003, login: "day4-stranger" },
+  someone: { id: 4004, login: "someone" },
+  "day4-renamer": { id: 4005, login: "day4-renamer" },
+};
+const repositories: Record<string, number> = { team: 88_005_001, own: 88_005_002, second: 88_005_003 };
+const repoId = repositories.team ?? 0;
+const workspaceNames = Object.keys(repositories).map((name) => `day4/${name}`);
 
 describe("Day 4 membership, settings and layout", () => {
   let server: Server;
@@ -21,13 +34,20 @@ describe("Day 4 membership, settings and layout", () => {
   let projectId = "";
 
   beforeAll(async () => {
-    await pool.query("delete from workspaces where name = $1", ["day4/team"]);
+    await pool.query("delete from workspaces where name = any($1::text[])", [workspaceNames]);
     await pool.query("delete from profiles where user_id = any($1::uuid[])", [Object.values(people).map((person) => person.id)]);
     server = createApp({
       pool,
       webhookSecret: "unused",
       verifyUser: async (token) => people[token] ?? null,
-      verifyRepositoryAccess: async (input) => (input.owner === "day4" && input.name === "team" ? { status: "accessible", repoId } : { status: "denied" }),
+      verifyRepositoryAccess: async (input) => {
+        const id = input.owner === "day4" ? repositories[input.name] : undefined;
+        return id ? { status: "accessible", repoId: id } : { status: "denied" };
+      },
+      lookupGithubAccount: async ({ login }) => {
+        const account = githubAccounts[login.toLowerCase()];
+        return account ? { status: "found", ...account } : { status: "not_found" };
+      },
     }).listen(0, "127.0.0.1");
     await new Promise<void>((resolve, reject) => {
       server.once("listening", () => resolve());
@@ -41,7 +61,7 @@ describe("Day 4 membership, settings and layout", () => {
   });
 
   afterAll(async () => {
-    await pool.query("delete from workspaces where name = $1", ["day4/team"]);
+    await pool.query("delete from workspaces where name = any($1::text[])", [workspaceNames]);
     await pool.query("delete from profiles where user_id = any($1::uuid[])", [Object.values(people).map((person) => person.id)]);
     await new Promise<void>((resolve, reject) => {
       server.close((error) => (error ? reject(error) : resolve()));
@@ -109,6 +129,34 @@ describe("Day 4 membership, settings and layout", () => {
     expect(settings.health.analysis.waiting).toBe(0);
   });
 
+  it("ties an invitation to the GitHub account, so a renamed login still joins and a reused one does not", async () => {
+    expect((await call("owner", `/projects/${projectId}/invitations`, { method: "POST", body: JSON.stringify({ githubLogin: "no-such-person" }) })).status).toBe(400);
+    const invited = await call("owner", `/projects/${projectId}/invitations`, { method: "POST", body: JSON.stringify({ githubLogin: "day4-renamer" }) });
+    expect(invited.status).toBe(201);
+    const invitationId = ((await invited.json()) as { id: string }).id;
+
+    const squatterView = (await (await call("squatter", "/me")).json()) as { invitations: unknown[] };
+    expect(squatterView.invitations).toEqual([]);
+    expect((await call("squatter", `/invitations/${invitationId}/accept`, { method: "POST" })).status).toBe(403);
+
+    const renamedView = (await (await call("renamed", "/me")).json()) as { invitations: Array<{ id: string }> };
+    expect(renamedView.invitations.map((invitation) => invitation.id)).toEqual([invitationId]);
+    expect((await call("renamed", `/invitations/${invitationId}/accept`, { method: "POST" })).status).toBe(201);
+  });
+
+  it("lets an invited member connect a repository of their own, but nobody own two", async () => {
+    const own = await call("renamed", "/projects", { method: "POST", body: JSON.stringify({ owner: "day4", name: "own" }) });
+    expect(own.status).toBe(201);
+    const listed = (await (await call("renamed", "/projects")).json()) as { projects: Array<{ name: string; role: string }> };
+    expect(listed.projects.map((project) => [project.name, project.role]).sort()).toEqual([
+      ["own", "owner"],
+      ["team", "member"],
+    ]);
+    const second = await call("renamed", "/projects", { method: "POST", body: JSON.stringify({ owner: "day4", name: "second" }) });
+    expect(second.status).toBe(409);
+    expect((await call("owner", "/projects", { method: "POST", body: JSON.stringify({ owner: "day4", name: "second" }) })).status).toBe(409);
+  });
+
   it("revokes an open invitation", async () => {
     const invited = await call("owner", `/projects/${projectId}/invitations`, { method: "POST", body: JSON.stringify({ githubLogin: "day4-stranger" }) });
     const invitationId = ((await invited.json()) as { id: string }).id;
@@ -144,6 +192,9 @@ describe("Day 4 membership, settings and layout", () => {
       body: JSON.stringify({ code: unusedCode.code }),
     });
     expect(lateExchange.status).toBe(401);
+    await expect(
+      pool.query(`insert into collector_tokens (project_id, label, token_hash) values ($1, 'nobody', 'day4-unowned-token')`, [projectId]),
+    ).rejects.toThrow(/collector_tokens_active_have_owner/);
   });
 
   it("saves node positions for this project's features without changing the graph revision", async () => {

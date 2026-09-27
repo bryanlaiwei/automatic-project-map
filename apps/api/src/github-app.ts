@@ -40,37 +40,12 @@ export function createGithubRepositoryAccessCheck(input: {
     }
 
     try {
-      const jwt = signGithubAppJwt(input.appId.trim(), input.privateKey);
+      const installation = await installationToken(fetchImpl, input.appId, input.privateKey, owner, name);
+      if (!("token" in installation)) {
+        return installation;
+      }
+      const { token } = installation;
       const repoPath = `/repos/${encodeURIComponent(owner)}/${encodeURIComponent(name)}`;
-      const installation = await githubRequest(fetchImpl, `${repoPath}/installation`, jwt, "GET");
-      if (installation.status === 404) {
-        return { status: "denied" };
-      }
-      if (!installation.ok) {
-        return {
-          status: "unavailable",
-          message: "GitHub did not confirm the App installation for this repository.",
-        };
-      }
-      const installationId = readNumberId(installation.body);
-      if (installationId === null) {
-        return { status: "unavailable", message: "GitHub installation response did not include an id." };
-      }
-
-      const tokenResponse = await githubRequest(
-        fetchImpl,
-        `/app/installations/${installationId}/access_tokens`,
-        jwt,
-        "POST",
-      );
-      if (!tokenResponse.ok) {
-        return { status: "unavailable", message: "Could not create a GitHub App installation token." };
-      }
-      const token = readToken(tokenResponse.body);
-      if (token === null) {
-        return { status: "unavailable", message: "GitHub did not return an installation token." };
-      }
-
       const repo = await githubRequest(fetchImpl, repoPath, token, "GET");
       if (repo.status === 404) {
         return { status: "denied" };
@@ -102,6 +77,75 @@ export function createGithubRepositoryAccessCheck(input: {
       return { status: "unavailable", message };
     }
   };
+}
+
+export type GithubAccount =
+  | { status: "found"; id: number; login: string }
+  | { status: "not_found" }
+  | { status: "unavailable"; message: string };
+
+/** Resolves a GitHub username to the person's account, through the App installation on the project's repository. */
+export type GithubAccountLookup = (input: { owner: string; name: string; login: string }) => Promise<GithubAccount>;
+
+export function createGithubAccountLookup(input: { appId: string; privateKey: string; fetchImpl?: typeof fetch }): GithubAccountLookup {
+  const fetchImpl = input.fetchImpl ?? fetch;
+  return async ({ owner, name, login }) => {
+    if (input.appId.trim() === "" || input.privateKey.trim() === "") {
+      return { status: "unavailable", message: "GitHub App credentials are not configured. Set GITHUB_APP_ID and GITHUB_APP_PRIVATE_KEY." };
+    }
+    try {
+      const installation = await installationToken(fetchImpl, input.appId, input.privateKey, owner, name);
+      if (!("token" in installation)) {
+        return installation.status === "denied"
+          ? { status: "unavailable", message: `The GitHub App can no longer see ${owner}/${name}.` }
+          : installation;
+      }
+      const user = await githubRequest(fetchImpl, `/users/${encodeURIComponent(login)}`, installation.token, "GET");
+      if (user.status === 404) {
+        return { status: "not_found" };
+      }
+      if (!user.ok || typeof user.body !== "object" || user.body === null) {
+        return { status: "unavailable", message: "GitHub did not answer the account lookup." };
+      }
+      const body = user.body as Record<string, unknown>;
+      if (body.type !== "User" || typeof body.id !== "number" || typeof body.login !== "string") {
+        return { status: "not_found" };
+      }
+      return { status: "found", id: body.id, login: body.login };
+    } catch (error) {
+      return { status: "unavailable", message: error instanceof Error ? error.message : "GitHub App authentication failed." };
+    }
+  };
+}
+
+async function installationToken(
+  fetchImpl: typeof fetch,
+  appId: string,
+  privateKey: string,
+  owner: string,
+  name: string,
+): Promise<{ token: string } | { status: "denied" } | { status: "unavailable"; message: string }> {
+  const jwt = signGithubAppJwt(appId.trim(), privateKey);
+  const installation = await githubRequest(fetchImpl, `/repos/${encodeURIComponent(owner)}/${encodeURIComponent(name)}/installation`, jwt, "GET");
+  if (installation.status === 404) {
+    return { status: "denied" };
+  }
+  if (!installation.ok) {
+    return { status: "unavailable", message: "GitHub did not confirm the App installation for this repository." };
+  }
+  const installationId = readNumberId(installation.body);
+  if (installationId === null) {
+    return { status: "unavailable", message: "GitHub installation response did not include an id." };
+  }
+  const tokenResponse = await githubRequest(fetchImpl, `/app/installations/${installationId}/access_tokens`, jwt, "POST");
+  if (!tokenResponse.ok) {
+    return { status: "unavailable", message: "Could not create a GitHub App installation token." };
+  }
+  const token = readToken(tokenResponse.body);
+  if (token === null) {
+    return { status: "unavailable", message: "GitHub did not return an installation token." };
+  }
+  return { token };
 }
 
 export function signGithubAppJwt(appId: string, privateKey: string): string {

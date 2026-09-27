@@ -34,13 +34,17 @@ describe("Supabase user check", () => {
         user_metadata: { user_name: "victim", full_name: "Someone Else" },
         identities: [
           { provider: "email", identity_data: { email: "me@example.com" } },
-          { provider: "github", identity_data: { user_name: "real-me", full_name: "Real Me", avatar_url: "https://avatars.test/1" } },
+          {
+            provider: "github",
+            identity_data: { user_name: "real-me", provider_id: "583231", full_name: "Real Me", avatar_url: "https://avatars.test/1" },
+          },
         ],
       }),
     );
     await expect(verifySupabaseUser("token")).resolves.toEqual({
       id: "user-1",
       githubLogin: "real-me",
+      githubId: "583231",
       name: "Real Me",
       avatarUrl: "https://avatars.test/1",
     });
@@ -50,6 +54,6 @@ describe("Supabase user check", () => {
     vi.stubGlobal("fetch", async () =>
       userResponse({ id: "user-2", user_metadata: { user_name: "victim" }, identities: [{ provider: "email", identity_data: {} }] }),
     );
-    await expect(verifySupabaseUser("token")).resolves.toEqual({ id: "user-2", githubLogin: null, name: null, avatarUrl: null });
+    await expect(verifySupabaseUser("token")).resolves.toEqual({ id: "user-2", githubLogin: null, githubId: null, name: null, avatarUrl: null });
   });
 });
