@@ -109,7 +109,7 @@ To check grouping quality with a real model, set `OPENAI_API_KEY` and run:
 npm run eval -w @apm/api
 ```
 
-It feeds sample sessions from all three agents and a few pull requests into a temporary project, prints the resulting map, and reports how many pairs of related evidence ended up together and how many unrelated pairs stayed apart. The project is deleted afterwards unless you pass `-- --keep`. `OPENAI_MODEL` defaults to `gpt-5-mini`.
+It feeds sample sessions from all three agents and a few pull requests into a temporary project, prints the resulting map, and reports how many pairs of related evidence ended up together and how many unrelated pairs stayed apart. The project is deleted afterwards unless you pass `-- --keep`. `OPENAI_MODEL` defaults to `gpt-5-nano`, the cheapest OpenAI model. If the eval shows related work being split up or unrelated work lumped together, set `OPENAI_MODEL=gpt-5-mini` (about five times the price) and compare.
 
 Day 4 is the web app at `http://127.0.0.1:5173`.
 
