@@ -6,6 +6,7 @@ import type { AuthUser } from "./auth.js";
 import type { RepositoryAccessCheck } from "./github-app.js";
 import { verifyGithubSignature } from "./github.js";
 import { createPairingCode, exchangePairingCode, findCollectorDevice, revokeCollectorToken } from "./collector-tokens.js";
+import { graphRouter } from "./graph/routes.js";
 import { ingestEvents } from "./ingest-events.js";
 import { acceptSessionChunk, getSessionUpload, resetSessionUpload, type SessionUploadView } from "./session-uploads.js";
 import {
@@ -236,6 +237,24 @@ export function createApp(deps: AppDeps) {
     const events = await listEvents(deps.pool, projectId);
     res.json({ events });
   });
+
+  app.use(
+    graphRouter({
+      pool: deps.pool,
+      access: async (req, res) => {
+        const user = await requireUser(deps, req, res);
+        if (!user) {
+          return null;
+        }
+        const projectId = req.params.projectId;
+        if (typeof projectId !== "string" || !(await userCanAccessProject(deps.pool, user.id, projectId))) {
+          res.status(404).json({ error: "Project not found." });
+          return null;
+        }
+        return { userId: user.id, projectId };
+      },
+    }),
+  );
 
   app.get("/ingest/sessions/chunks", async (req, res) => {
     const user = await requireUser(deps, req, res);

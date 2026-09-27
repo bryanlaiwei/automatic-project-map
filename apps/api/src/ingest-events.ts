@@ -41,6 +41,11 @@ export async function ingestEvents(
       rejected.push({ eventId: parsed.data.eventId, reason: "project_mismatch" });
       continue;
     }
+    // Pull request and CI facts decide delivery state, so they only enter through the verified webhook and refresh.
+    if (parsed.data.source === "github") {
+      rejected.push({ eventId: parsed.data.eventId, reason: "github_events_come_from_github" });
+      continue;
+    }
     const sessionReason = sessionRejection(parsed.data, trackingStartedAt.toISOString());
     if (sessionReason) {
       rejected.push({ eventId: parsed.data.eventId, reason: sessionReason });
