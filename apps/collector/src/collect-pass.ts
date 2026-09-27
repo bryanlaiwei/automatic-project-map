@@ -1,4 +1,4 @@
-import { readdirSync, readFileSync, statSync } from "node:fs";
+import { readdirSync, readFileSync, statSync, type Dirent } from "node:fs";
 import { join } from "node:path";
 import {
   evaluateSessionEligibility,
@@ -11,7 +11,7 @@ import {
 import { parseClaudeCodeText } from "./adapters/claude-code.js";
 import { parseCodexText } from "./adapters/codex.js";
 import { parseCursorText } from "./adapters/cursor.js";
-import type { ChangeTracker } from "./change-tracker.js";
+import type { ChangeTracker, FileChange } from "./change-tracker.js";
 import { completePrefixEnd, fileGeneration } from "./lines.js";
 import { LocalDb, type SessionCheckpoint } from "./local-db.js";
 import type { ParsedSession } from "./types.js";
@@ -43,6 +43,7 @@ export type CollectPassResult = {
   excluded: string[];
   paused: string[];
   skipped: string[];
+  failed: string[];
 };
 
 const adapterVersion = "day2";
@@ -61,6 +62,7 @@ type Discovered = {
   nextCursor: string;
   newRecords: SessionMessage[];
   truncated: boolean;
+  change?: FileChange;
 };
 
 function collectOne(input: CollectPassInput, source: Discovered, result: CollectPassResult): void {
@@ -259,11 +261,13 @@ export function contentGroups(records: readonly SessionMessage[]): SessionMessag
   return groups;
 }
 
+/** Postgres cannot store NUL characters in text, so one would make the server refuse the whole upload. */
 function shortenMessage(record: SessionMessage): SessionMessage {
-  if (record.text.length <= contentEventLimits.messageChars) {
-    return record;
+  const text = record.text.includes("\u0000") ? record.text.replaceAll("\u0000", "") : record.text;
+  if (text.length <= contentEventLimits.messageChars) {
+    return text === record.text ? record : { ...record, text };
   }
-  return { ...record, text: record.text.slice(0, contentEventLimits.messageChars - shortenedMarker.length) + shortenedMarker };
+  return { ...record, text: text.slice(0, contentEventLimits.messageChars - shortenedMarker.length) + shortenedMarker };
 }
 
 function discover(agent: AgentId, root: string, changes: ChangeTracker | undefined): Discovered[] {
@@ -284,26 +288,30 @@ function discover(agent: AgentId, root: string, changes: ChangeTracker | undefin
       if (!exists(sessionPath) || !exists(transcriptPath)) {
         continue;
       }
-      if (changes?.unchanged([sessionPath, transcriptPath])) {
-        continue;
-      }
-      const source = safely(() => readCursor(directory, sessionPath, transcriptPath));
-      if (source) {
-        found.push(source);
-      }
+      pushChanged(found, changes, [sessionPath, transcriptPath], () => readCursor(directory, sessionPath, transcriptPath));
     }
     return found;
   }
   for (const filePath of walkFiles(root, ".jsonl")) {
-    if (changes?.unchanged([filePath])) {
-      continue;
-    }
-    const source = safely(() => (agent === "codex" ? readCodex(filePath) : readClaude(filePath)));
-    if (source) {
-      found.push(source);
-    }
+    pushChanged(found, changes, [filePath], () => (agent === "codex" ? readCodex(filePath) : readClaude(filePath)));
   }
   return found;
+}
+
+function pushChanged(found: Discovered[], changes: ChangeTracker | undefined, paths: string[], read: () => Discovered): void {
+  const change = changes?.changed(paths);
+  if (change === null) {
+    return;
+  }
+  const source = safely(read);
+  if (!source) {
+    // Unparseable files are tried again once they change.
+    if (change) {
+      changes?.remember(change);
+    }
+    return;
+  }
+  found.push(change ? { ...source, change } : source);
 }
 
 function safely(read: () => Discovered): Discovered | null {
@@ -369,18 +377,15 @@ export function sliceNewRecords(source: Discovered, cursor: string): Discovered 
   if (!Number.isInteger(offset) || offset < 0) {
     return { ...source, truncated: true, newRecords: [], cursor };
   }
+  if (offset === 0) {
+    return { ...source, cursor: "" };
+  }
   const filePath = source.agent === "cursor" ? join(source.locator, "transcript.jsonl") : source.locator;
   const bytes = readFileSync(filePath);
-  if (bytes.length < offset) {
-    return { ...source, truncated: true, newRecords: [], cursor };
-  }
   const completeEnd = completePrefixEnd(bytes);
-  if (offset > completeEnd) {
-    return { ...source, newRecords: [], cursor, nextCursor: String(completeEnd) };
-  }
-  const fresh = source.agent === "cursor" ? readCursor(source.locator, join(source.locator, "session.json"), filePath) : source.agent === "codex" ? readCodex(filePath) : readClaude(filePath);
-  if (offset === 0) {
-    return { ...fresh, cursor: "" };
+  // The saved offset always sat just after a newline, so a file that no longer has one there was rewritten.
+  if (bytes.length < offset || offset > completeEnd) {
+    return { ...source, truncated: true, newRecords: [], cursor };
   }
   const newText = bytes.subarray(offset, completeEnd).toString("utf8");
   const parsedNew =
@@ -390,10 +395,10 @@ export function sliceNewRecords(source: Discovered, cursor: string): Discovered 
         ? parseClaudeCodeText(newText)
         : parseCursorText(readFileSync(join(source.locator, "session.json"), "utf8"), newText);
   return {
-    ...fresh,
+    ...source,
     cursor,
+    nextCursor: String(completeEnd),
     newRecords: parsedNew.records,
-    parsed: fresh.parsed,
   };
 }
 
@@ -416,9 +421,17 @@ function exists(filePath: string): boolean {
   }
 }
 
+function readEntries(directory: string): Dirent[] {
+  try {
+    return readdirSync(directory, { withFileTypes: true });
+  } catch {
+    return [];
+  }
+}
+
 function walkFiles(root: string, extension: string): string[] {
   const found: string[] = [];
-  for (const entry of readdirSync(root, { withFileTypes: true })) {
+  for (const entry of readEntries(root)) {
     if (entry.name === "node_modules" || entry.name.startsWith(".")) {
       continue;
     }
@@ -436,7 +449,7 @@ function walkFiles(root: string, extension: string): string[] {
 
 function walkDirectories(root: string): string[] {
   const found = [root];
-  for (const entry of readdirSync(root, { withFileTypes: true })) {
+  for (const entry of readEntries(root)) {
     if (!entry.isDirectory() || entry.name === "node_modules" || entry.name.startsWith(".")) {
       continue;
     }
@@ -446,7 +459,7 @@ function walkDirectories(root: string): string[] {
 }
 
 export function prepareIncremental(input: CollectPassInput): CollectPassResult {
-  const result: CollectPassResult = { queuedEventIds: [], excluded: [], paused: [], skipped: [] };
+  const result: CollectPassResult = { queuedEventIds: [], excluded: [], paused: [], skipped: [], failed: [] };
   const agents: AgentId[] = ["codex", "cursor", "claude_code"];
   for (const agent of agents) {
     const root = input.logRoots[agent];
@@ -456,10 +469,19 @@ export function prepareIncremental(input: CollectPassInput): CollectPassResult {
     const found = discover(agent, root, input.changes);
     input.db.noteDiscovery(agent, String(found.length), adapterVersion);
     for (const source of found) {
-      const sessionId = source.parsed.sessionId;
-      const existing = sessionId ? input.db.checkpoint(agent, sessionId, input.projectId) : null;
-      const sliced = sliceNewRecords(source, existing?.nextCursor ?? "");
-      collectOne(input, sliced, result);
+      try {
+        const sessionId = source.parsed.sessionId;
+        const existing = sessionId ? input.db.checkpoint(agent, sessionId, input.projectId) : null;
+        const sliced = sliceNewRecords(source, existing?.nextCursor ?? "");
+        collectOne(input, sliced, result);
+      } catch (error) {
+        // Leave the file unremembered so the next scan tries it again; other sessions carry on.
+        result.failed.push(`${agent}:${source.sessionKey}: ${error instanceof Error ? error.message : "unknown error"}`);
+        continue;
+      }
+      if (source.change) {
+        input.changes?.remember(source.change);
+      }
     }
   }
   return result;

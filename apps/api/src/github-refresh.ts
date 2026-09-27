@@ -58,7 +58,7 @@ async function refreshPullRequests(pool: Pool, github: GithubLookup, projectId: 
        and o.state->>'state' = 'open'
        and o.updated_at > now() - make_interval(days => $1)
        and ($3::uuid is null or o.project_id = $3::uuid)
-     order by o.updated_at desc
+     order by o.refreshed_at asc nulls first, o.updated_at desc
      limit $2`,
     [refreshLimits.pullRequestMaxAgeDays, refreshLimits.pullRequestsPerRun, projectId],
   );
@@ -69,13 +69,16 @@ async function refreshPullRequests(pool: Pool, github: GithubLookup, projectId: 
       continue;
     }
     const snapshot = await github.enrichPullRequest(row.github_owner, row.github_name, number);
+    if (snapshot) {
+      await markRefreshed(pool, row, "pull_request");
+    }
     if (!snapshot || Date.parse(snapshot.updatedAt) <= row.updated_at.getTime()) {
       continue;
     }
     const base = normalizedEventSchema.parse({
       schemaVersion: SCHEMA_VERSION,
       eventId: `github:refresh:pull_request:${row.source_id}:${snapshot.updatedAt}`,
-      sourceKey: `github:pull_request:${row.source_id}:${snapshot.updatedAt}`,
+      sourceKey: `github:pr:${row.source_id}:${snapshot.updatedAt}`,
       projectId: row.project_id,
       source: "github",
       occurredAt: snapshot.updatedAt,
@@ -109,7 +112,7 @@ async function refreshWorkflowRuns(pool: Pool, github: GithubLookup, projectId: 
        and o.state->>'status' <> 'completed'
        and o.updated_at > now() - make_interval(hours => $1)
        and ($3::uuid is null or o.project_id = $3::uuid)
-     order by o.updated_at desc
+     order by o.refreshed_at asc nulls first, o.updated_at desc
      limit $2`,
     [refreshLimits.workflowRunMaxAgeHours, refreshLimits.workflowRunsPerRun, projectId],
   );
@@ -120,6 +123,9 @@ async function refreshWorkflowRuns(pool: Pool, github: GithubLookup, projectId: 
       continue;
     }
     const snapshot = await github.enrichWorkflowRun(row.github_owner, row.github_name, runId);
+    if (snapshot) {
+      await markRefreshed(pool, row, "workflow_run");
+    }
     if (!snapshot || Date.parse(snapshot.updatedAt) <= row.updated_at.getTime()) {
       continue;
     }
@@ -132,7 +138,7 @@ async function refreshWorkflowRuns(pool: Pool, github: GithubLookup, projectId: 
     const base = normalizedEventSchema.parse({
       schemaVersion: SCHEMA_VERSION,
       eventId: `github:refresh:workflow_run:${runId}:${snapshot.attempt}:${snapshot.updatedAt}`,
-      sourceKey: `github:workflow_run:${runId}:${snapshot.attempt}:${snapshot.updatedAt}`,
+      sourceKey: `github:run:${runId}:${snapshot.attempt}:${snapshot.status}`,
       projectId: row.project_id,
       source: "github",
       occurredAt: snapshot.updatedAt,
@@ -141,6 +147,13 @@ async function refreshWorkflowRuns(pool: Pool, github: GithubLookup, projectId: 
     eventsStored += await storeRefreshedEvent(pool, row.project_id, applyWorkflowSnapshot(base, snapshot));
   }
   return { checked: rows.rows.length, eventsStored };
+}
+
+async function markRefreshed(pool: Pool, row: ObservationRow, kind: "pull_request" | "workflow_run"): Promise<void> {
+  await pool.query(
+    `update github_observations set refreshed_at = now() where project_id = $1 and kind = $2 and source_id = $3`,
+    [row.project_id, kind, row.source_id],
+  );
 }
 
 async function storeRefreshedEvent(pool: Pool, projectId: string, event: NormalizedEvent): Promise<number> {

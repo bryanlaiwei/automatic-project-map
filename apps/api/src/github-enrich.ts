@@ -280,19 +280,42 @@ function readJobs(body: unknown): WorkflowSnapshot["jobs"] {
 }
 
 const githubApi = "https://api.github.com";
+const githubTimeoutMs = 15_000;
+const tokenReuseMarginMs = 5 * 60_000;
 
+type CachedToken = { token: string; expiresAt: number };
+
+/**
+ * Reads current pull request and run details. Network failures and timeouts return null, so callers fall
+ * back to what the webhook itself said instead of failing the delivery.
+ */
 export function createGithubEnricher(input: {
   appId: string;
   privateKey: string;
   fetchImpl?: typeof fetch;
+  now?: () => number;
 }): {
   enrichPullRequest(owner: string, name: string, number: number): Promise<PullRequestSnapshot | null>;
   enrichWorkflowRun(owner: string, name: string, runId: number): Promise<WorkflowSnapshot | null>;
 } {
   const fetchImpl = input.fetchImpl ?? fetch;
+  const now = input.now ?? Date.now;
+  const tokens = new Map<string, CachedToken>();
+  async function installationToken(owner: string, name: string): Promise<string | null> {
+    const key = `${owner}/${name}`.toLowerCase();
+    const cached = tokens.get(key);
+    if (cached && cached.expiresAt - tokenReuseMarginMs > now()) {
+      return cached.token;
+    }
+    const fresh = await requestInstallationToken(fetchImpl, input.appId, input.privateKey, owner, name);
+    if (fresh) {
+      tokens.set(key, fresh);
+    }
+    return fresh?.token ?? null;
+  }
   return {
     async enrichPullRequest(owner, name, number) {
-      const token = await installationToken(fetchImpl, input.appId, input.privateKey, owner, name);
+      const token = await installationToken(owner, name);
       if (!token) {
         return null;
       }
@@ -307,7 +330,7 @@ export function createGithubEnricher(input: {
       return snapshotFromPullRequest(pull, commits, files);
     },
     async enrichWorkflowRun(owner, name, runId) {
-      const token = await installationToken(fetchImpl, input.appId, input.privateKey, owner, name);
+      const token = await installationToken(owner, name);
       if (!token) {
         return null;
       }
@@ -323,13 +346,13 @@ export function createGithubEnricher(input: {
   };
 }
 
-async function installationToken(
+async function requestInstallationToken(
   fetchImpl: typeof fetch,
   appId: string,
   privateKey: string,
   owner: string,
   name: string,
-): Promise<string | null> {
+): Promise<CachedToken | null> {
   if (appId.trim() === "" || privateKey.trim() === "") {
     return null;
   }
@@ -341,33 +364,38 @@ async function installationToken(
       return null;
     }
     const tokenResponse = await githubPost(fetchImpl, `/app/installations/${installationId}/access_tokens`, jwt);
-    return isRecord(tokenResponse) && typeof tokenResponse.token === "string" && tokenResponse.token.length > 0
-      ? tokenResponse.token
-      : null;
+    if (!isRecord(tokenResponse) || typeof tokenResponse.token !== "string" || tokenResponse.token.length === 0) {
+      return null;
+    }
+    const expiresAt = typeof tokenResponse.expires_at === "string" ? Date.parse(tokenResponse.expires_at) : Number.NaN;
+    return { token: tokenResponse.token, expiresAt: Number.isNaN(expiresAt) ? 0 : expiresAt };
   } catch {
     return null;
   }
 }
 
 async function githubGet(fetchImpl: typeof fetch, path: string, token: string): Promise<unknown> {
-  const response = await fetchImpl(`${githubApi}${path}`, {
-    headers: githubHeaders(token),
-  });
-  if (!response.ok) {
-    return null;
-  }
-  return response.json().catch(() => null);
+  return githubRequest(fetchImpl, path, token, "GET");
 }
 
 async function githubPost(fetchImpl: typeof fetch, path: string, token: string): Promise<unknown> {
-  const response = await fetchImpl(`${githubApi}${path}`, {
-    method: "POST",
-    headers: githubHeaders(token),
-  });
-  if (!response.ok) {
+  return githubRequest(fetchImpl, path, token, "POST");
+}
+
+async function githubRequest(fetchImpl: typeof fetch, path: string, token: string, method: "GET" | "POST"): Promise<unknown> {
+  try {
+    const response = await fetchImpl(`${githubApi}${path}`, {
+      method,
+      headers: githubHeaders(token),
+      signal: AbortSignal.timeout(githubTimeoutMs),
+    });
+    if (!response.ok) {
+      return null;
+    }
+    return await response.json().catch(() => null);
+  } catch {
     return null;
   }
-  return response.json().catch(() => null);
 }
 
 function githubHeaders(token: string): Record<string, string> {

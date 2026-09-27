@@ -56,6 +56,7 @@ export class CollectorLoop {
   private readonly log: (line: string) => void;
   private failures = 0;
   private nextUploadAt = 0;
+  private uploadError: string | null = null;
   private pairedDevice: string | null = null;
   private running: Promise<CollectorStatus> | null = null;
   private timer: ReturnType<typeof setInterval> | null = null;
@@ -118,6 +119,8 @@ export class CollectorLoop {
   }
 
   private async runOnce(): Promise<CollectorStatus> {
+    // The scan below is synchronous; let the request that triggered it answer first.
+    await new Promise((resolve) => setImmediate(resolve));
     const { db } = this.options;
     const pairing = db.getPairing();
     if (!pairing) {
@@ -129,20 +132,17 @@ export class CollectorLoop {
       this.pairedDevice = pairing.deviceId;
       this.failures = 0;
       this.nextUploadAt = 0;
-      this.current = { ...this.current, needsPairing: false, lastError: null, nextUploadAt: null };
+      this.uploadError = null;
+      this.current = { ...this.current, needsPairing: false, nextUploadAt: null };
     }
 
-    const roots = db
-      .folders()
-      .filter((folder) => folder.enabled && folder.projectId === pairing.projectId)
-      .map((folder) => folder.canonicalPath)
-      .sort();
+    const roots = db.enabledRoots(pairing.projectId);
     this.changes.useScope([pairing.projectId, pairing.trackingStartedAt, ...roots].join("\u0000"));
 
     let scanError: string | null = null;
     try {
       if (roots.length > 0) {
-        runCollectionPass({
+        const pass = runCollectionPass({
           db,
           projectId: pairing.projectId,
           trackingStartedAt: pairing.trackingStartedAt,
@@ -150,9 +150,17 @@ export class CollectorLoop {
           logRoots: this.options.logRoots,
           changes: this.changes,
         });
+        for (const failure of pass.failed) {
+          this.log(`could not collect ${failure}`);
+        }
+        const first = pass.failed[0];
+        if (first) {
+          scanError = `Could not collect ${pass.failed.length} session${pass.failed.length === 1 ? "" : "s"}; trying again next scan (${first})`;
+        }
       }
       this.current.lastScanAt = new Date(this.now()).toISOString();
     } catch (error) {
+      this.changes.forget();
       scanError = `Scan failed: ${error instanceof Error ? error.message : "unknown error"}`;
       this.log(scanError);
     }
@@ -163,28 +171,37 @@ export class CollectorLoop {
         this.current.dropped += staleProject;
         this.log(`dropped ${staleProject} queued events for a project this helper is no longer paired with`);
       }
+      const unselected = db.dropUnselected(pairing.projectId, roots);
+      if (unselected > 0) {
+        this.current.dropped += unselected;
+        this.log(`dropped ${unselected} queued events from sessions outside the selected folders`);
+      }
       await this.upload(pairing);
     } catch (error) {
-      this.current.lastError = `Upload failed: ${error instanceof Error ? error.message : "unknown error"}`;
-      this.log(this.current.lastError);
-    }
-    if (scanError !== null) {
-      this.current.lastError = scanError;
+      this.uploadError = `Upload failed: ${error instanceof Error ? error.message : "unknown error"}`;
+      this.log(this.uploadError);
     }
 
     this.current = {
       ...this.current,
       paired: true,
       selectedFolders: roots.length,
-      queued: db.pendingEvents().length,
+      queued: db.pendingCount(),
       paused: db.pausedSessions(pairing.projectId),
+      lastError: scanError ?? this.uploadError,
       nextUploadAt: this.nextUploadAt > this.now() ? new Date(this.nextUploadAt).toISOString() : null,
     };
     return this.status();
   }
 
   private async upload(pairing: PairingRecord): Promise<void> {
-    if (this.options.db.pendingEvents().length === 0 || this.now() < this.nextUploadAt) {
+    if (this.options.db.pendingCount() === 0) {
+      if (!this.current.needsPairing) {
+        this.uploadError = null;
+      }
+      return;
+    }
+    if (this.now() < this.nextUploadAt) {
       return;
     }
     const result = await flushOutbox(this.options.db, this.transportFor(pairing), { projectId: pairing.projectId });
@@ -196,7 +213,7 @@ export class CollectorLoop {
     if (result.error === null) {
       this.failures = 0;
       this.nextUploadAt = 0;
-      this.current.lastError = null;
+      this.uploadError = null;
       this.current.needsPairing = false;
       if (result.acknowledged.length > 0) {
         this.current.lastUploadAt = new Date(this.now()).toISOString();
@@ -206,7 +223,7 @@ export class CollectorLoop {
     }
     this.failures += 1;
     this.nextUploadAt = this.now() + uploadBackoffMs(this.failures);
-    this.current.lastError = result.error;
+    this.uploadError = result.error;
     this.current.needsPairing = result.unauthorized;
     this.log(
       result.unauthorized

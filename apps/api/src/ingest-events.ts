@@ -32,7 +32,8 @@ export async function ingestEvents(
   const rejected: IngestRejection[] = [];
   for (const [index, candidate] of input.events.entries()) {
     const parsed = normalizedEventSchema.safeParse(candidate);
-    if (!parsed.success) {
+    // Postgres cannot store NUL in jsonb text, and one such event would fail the whole batch.
+    if (!parsed.success || containsNul(parsed.data)) {
       rejected.push({ eventId: eventIdOf(candidate) ?? `index:${index}`, reason: "invalid_event" });
       continue;
     }
@@ -51,9 +52,9 @@ export async function ingestEvents(
   const client = await pool.connect();
   try {
     await client.query("begin");
-    const storedIds = await insertAndList(client, accepted);
+    const stored = await insertAndList(client, input.projectId, accepted);
     await client.query("commit");
-    return { acknowledged: storedIds, rejected };
+    return { acknowledged: stored.acknowledged, rejected: [...rejected, ...stored.rejected] };
   } catch (error) {
     await client.query("rollback");
     throw error;
@@ -62,18 +63,33 @@ export async function ingestEvents(
   }
 }
 
-async function insertAndList(client: PoolClient, events: NormalizedEvent[]): Promise<string[]> {
+/** Event ids are global, so an id already stored for another project is refused rather than acknowledged. */
+async function insertAndList(
+  client: PoolClient,
+  projectId: string,
+  events: NormalizedEvent[],
+): Promise<{ acknowledged: string[]; rejected: IngestRejection[] }> {
   if (events.length === 0) {
-    return [];
+    return { acknowledged: [], rejected: [] };
   }
   await insertEventsWith(client, events);
   const ids = events.map((event) => event.eventId);
-  const existing = await client.query<{ event_id: string }>(
-    `select event_id from normalized_events where event_id = any($1::text[])`,
+  const existing = await client.query<{ event_id: string; project_id: string }>(
+    `select event_id, project_id from normalized_events where event_id = any($1::text[])`,
     [ids],
   );
-  const present = new Set(existing.rows.map((row) => row.event_id));
-  return ids.filter((id) => present.has(id));
+  const owner = new Map(existing.rows.map((row) => [row.event_id, row.project_id]));
+  const acknowledged: string[] = [];
+  const rejected: IngestRejection[] = [];
+  for (const id of ids) {
+    const storedFor = owner.get(id);
+    if (storedFor === projectId) {
+      acknowledged.push(id);
+    } else if (storedFor !== undefined) {
+      rejected.push({ eventId: id, reason: "event_id_in_other_project" });
+    }
+  }
+  return { acknowledged, rejected };
 }
 
 function sessionRejection(event: NormalizedEvent, trackingStartedAt: string): string | null {
@@ -93,6 +109,19 @@ function sessionRejection(event: NormalizedEvent, trackingStartedAt: string): st
     return "missing_creation_time";
   }
   return null;
+}
+
+function containsNul(value: unknown): boolean {
+  if (typeof value === "string") {
+    return value.includes("\u0000");
+  }
+  if (Array.isArray(value)) {
+    return value.some(containsNul);
+  }
+  if (typeof value === "object" && value !== null) {
+    return Object.values(value).some(containsNul);
+  }
+  return false;
 }
 
 function eventIdOf(value: unknown): string | null {

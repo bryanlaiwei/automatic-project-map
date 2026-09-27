@@ -220,6 +220,8 @@ export async function enqueueDelivery(
 }
 
 export const deliveryAttemptLimit = 5;
+/** A failed delivery waits 1, 2, 4, then 8 minutes, so a short outage does not use up its attempts. */
+export const deliveryRetryBaseSeconds = 60;
 
 export async function processQueuedDeliveries(
   pool: Pool,
@@ -231,6 +233,7 @@ export async function processQueuedDeliveries(
      from webhook_deliveries
      where status = 'queued'
        and received_at <= now() - make_interval(secs => $1)
+       and (next_attempt_at is null or next_attempt_at <= now())
        and ($2::text[] is null or delivery_id = any($2::text[]))
      order by received_at asc
      limit 200`,
@@ -255,9 +258,10 @@ async function recordDeliveryFailure(pool: Pool, deliveryId: string, error: unkn
      set attempts = attempts + 1,
          note = left($2, 500),
          status = case when attempts + 1 >= $3 then 'failed' else 'queued' end,
-         processed_at = case when attempts + 1 >= $3 then now() else processed_at end
+         processed_at = case when attempts + 1 >= $3 then now() else processed_at end,
+         next_attempt_at = now() + make_interval(secs => $4 * power(2, attempts))
      where delivery_id = $1`,
-    [deliveryId, message, deliveryAttemptLimit],
+    [deliveryId, message, deliveryAttemptLimit, deliveryRetryBaseSeconds],
   );
 }
 

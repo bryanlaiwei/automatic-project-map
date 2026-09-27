@@ -124,11 +124,12 @@ describe("background GitHub work", () => {
       ["github:refresh:pull_request:3101:2026-09-25T11:00:00.000Z"],
     );
     expect(stored.rows[0]?.details).toMatchObject({ merged: true, state: "closed" });
-    const observation = await pool.query<{ merged: boolean }>(
-      "select merged from github_observations where project_id = $1 and kind = 'pull_request' and source_id = '3101'",
+    const observation = await pool.query<{ merged: boolean; refreshed_at: Date | null }>(
+      "select merged, refreshed_at from github_observations where project_id = $1 and kind = 'pull_request' and source_id = '3101'",
       [projectId],
     );
     expect(observation.rows[0]?.merged).toBe(true);
+    expect(observation.rows[0]?.refreshed_at).not.toBeNull();
 
     const second = await refreshObservedGithub(pool, github, { projectId });
     const again = await pool.query(
@@ -200,7 +201,15 @@ describe("background GitHub work", () => {
       );
     expect(await statuses()).toEqual({ "bg-broken": "queued:1", "bg-stale": "processed:1", "bg-fresh": "queued:0" });
 
+    await processQueuedDeliveries(pool, github, { olderThanSeconds: 60, deliveryIds: ["bg-broken"] });
+    expect((await statuses())["bg-broken"]).toBe("queued:1");
+    const waits = await pool.query<{ seconds: number }>(
+      "select extract(epoch from next_attempt_at - now())::int as seconds from webhook_deliveries where delivery_id = 'bg-broken'",
+    );
+    expect(waits.rows[0]?.seconds).toBeGreaterThan(50);
+
     for (let attempt = 1; attempt < deliveryAttemptLimit; attempt += 1) {
+      await pool.query("update webhook_deliveries set next_attempt_at = now() where delivery_id = 'bg-broken'");
       await processQueuedDeliveries(pool, github, { olderThanSeconds: 60, deliveryIds: ["bg-broken"] });
     }
     expect((await statuses())["bg-broken"]).toBe(`failed:${deliveryAttemptLimit}`);
@@ -219,6 +228,7 @@ describe("background GitHub work", () => {
     expect(row.rows[0]).toMatchObject({ status: "queued", note: "fetch failed" });
 
     failing.delete(98);
+    await pool.query("update webhook_deliveries set next_attempt_at = now() where delivery_id = 'bg-throws-inline'");
     await processQueuedDeliveries(pool, github, { deliveryIds: ["bg-throws-inline"] });
     const retried = await pool.query<{ status: string }>("select status from webhook_deliveries where delivery_id = 'bg-throws-inline'");
     expect(retried.rows[0]?.status).toBe("processed");

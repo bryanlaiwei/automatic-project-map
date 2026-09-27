@@ -121,6 +121,10 @@ export async function startLocalServer(options: LocalServerOptions): Promise<Ser
       if (req.method === "POST" && url.pathname.startsWith("/folders/") && url.pathname.endsWith("/disable")) {
         const id = decodeURIComponent(url.pathname.slice("/folders/".length, -"/disable".length));
         options.db.setFolderEnabled(id, false);
+        const paired = options.db.getPairing();
+        if (paired) {
+          options.db.dropUnselected(paired.projectId, options.db.enabledRoots(paired.projectId));
+        }
         if (isFormPost(req)) {
           res.writeHead(303, { Location: "/" });
           res.end();

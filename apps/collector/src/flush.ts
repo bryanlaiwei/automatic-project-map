@@ -64,6 +64,13 @@ export async function flushOutbox(
       db.discard(rejected.map((item) => item.eventId));
       result.rejected.push(...rejected);
     } catch (error) {
+      const tooLarge = batch[0];
+      if (error instanceof UploadError && error.status === 413 && batch.length === 1 && tooLarge) {
+        // Nothing smaller can be sent for this event, and retrying it would hold up everything behind it.
+        db.discard([tooLarge.eventId]);
+        result.rejected.push({ eventId: tooLarge.eventId, reason: "too_large" });
+        continue;
+      }
       const message = error instanceof Error ? error.message : "Upload failed.";
       const unsent = batches.slice(index).flat();
       db.recordFailure(unsent.map((item) => item.eventId), message);

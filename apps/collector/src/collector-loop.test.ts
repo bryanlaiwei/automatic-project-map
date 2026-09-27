@@ -150,26 +150,145 @@ describe("outbox upload", () => {
     expect(db.pendingEvents()).toEqual([]);
     db.close();
   });
+
+  it("drops a single event the API refuses as too large and sends the rest", async () => {
+    const db = queueSessions(tempRoot(), 2);
+    const huge = db.pendingEvents().find((item) => item.event.details.kind === "session.content_added");
+    if (!huge || huge.event.details.kind !== "session.content_added") {
+      throw new Error("expected a queued content event");
+    }
+    // An event queued before content events were split can exceed the request limit on its own.
+    const inflated = { ...huge.event, details: { ...huge.event.details, messages: [{ ...huge.event.details.messages[0], text: "z".repeat(600_000) }] } };
+    db.db.prepare("update outbox set event_json = ? where event_id = ?").run(JSON.stringify(inflated), huge.eventId);
+    const rest = db.pendingEvents().filter((item) => item.eventId !== huge.eventId);
+    const sent: string[] = [];
+    const result = await flushOutbox(db, {
+      async send(input) {
+        if (input.events.some((event) => event.eventId === huge?.eventId)) {
+          throw new UploadError("Request entity too large", 413);
+        }
+        sent.push(...input.events.map((event) => event.eventId));
+        return { acknowledged: input.events.map((event) => event.eventId), rejected: [] };
+      },
+    });
+    expect(result.rejected).toEqual([{ eventId: huge?.eventId, reason: "too_large" }]);
+    expect(sent).toEqual(rest.map((item) => item.eventId));
+    expect(db.pendingEvents()).toEqual([]);
+    db.close();
+  });
 });
 
 describe("change tracker", () => {
+  function seenAfterCheck(tracker: ChangeTracker, file: string): boolean {
+    const change = tracker.changed([file]);
+    if (change) {
+      tracker.remember(change);
+    }
+    return change === null;
+  }
+
   it("skips a file until its size or modification time changes, and forgets on a new scope", () => {
     const root = tempRoot();
     const file = join(root, "a.jsonl");
     writeFileSync(file, "one\n");
     const tracker = new ChangeTracker();
     tracker.useScope("project-a");
-    expect(tracker.unchanged([file])).toBe(false);
-    expect(tracker.unchanged([file])).toBe(true);
+    expect(seenAfterCheck(tracker, file)).toBe(false);
+    expect(seenAfterCheck(tracker, file)).toBe(true);
     appendFileSync(file, "two\n");
-    expect(tracker.unchanged([file])).toBe(false);
+    expect(seenAfterCheck(tracker, file)).toBe(false);
     utimesSync(file, new Date("2026-09-25T00:00:00Z"), new Date("2026-09-25T00:00:00Z"));
-    expect(tracker.unchanged([file])).toBe(false);
-    expect(tracker.unchanged([file])).toBe(true);
+    expect(seenAfterCheck(tracker, file)).toBe(false);
+    expect(seenAfterCheck(tracker, file)).toBe(true);
     tracker.useScope("project-a");
-    expect(tracker.unchanged([file])).toBe(true);
+    expect(seenAfterCheck(tracker, file)).toBe(true);
     tracker.useScope("project-a with another folder");
-    expect(tracker.unchanged([file])).toBe(false);
+    expect(seenAfterCheck(tracker, file)).toBe(false);
+  });
+
+  it("keeps offering a file until it is remembered", () => {
+    const root = tempRoot();
+    const file = join(root, "a.jsonl");
+    writeFileSync(file, "one\n");
+    const tracker = new ChangeTracker();
+    expect(tracker.changed([file])).not.toBeNull();
+    expect(tracker.changed([file])).not.toBeNull();
+  });
+});
+
+describe("collection pass", () => {
+  it("collects a session on the next scan after its first attempt failed, without holding up the others", () => {
+    const root = tempRoot();
+    const logs = join(root, "codex");
+    mkdirSync(logs);
+    writeFileSync(join(logs, "a.jsonl"), codexSession("session-a", ["from a"]));
+    writeFileSync(join(logs, "b.jsonl"), codexSession("session-b", ["from b"]));
+    const db = new LocalDb(join(root, "collector.sqlite"));
+    const changes = new ChangeTracker();
+    const queue = db.queueAndAdvance.bind(db);
+    let failNext = true;
+    db.queueAndAdvance = (checkpoint, events) => {
+      if (failNext) {
+        failNext = false;
+        throw new Error("database is locked");
+      }
+      queue(checkpoint, events);
+    };
+    const input = { db, projectId, trackingStartedAt, selectedRoots: [workFolder], logRoots: { codex: logs }, changes };
+
+    const first = runCollectionPass(input);
+    expect(first.failed).toHaveLength(1);
+    expect(new Set(db.pendingEvents().map((item) => item.sessionId)).size).toBe(1);
+
+    const second = runCollectionPass(input);
+    expect(second.failed).toEqual([]);
+    expect(new Set(db.pendingEvents().map((item) => item.sessionId))).toEqual(new Set(["session-a", "session-b"]));
+    db.close();
+  });
+
+  it("strips NUL characters, which the server's database cannot store", () => {
+    const root = tempRoot();
+    const logs = join(root, "codex");
+    mkdirSync(logs);
+    writeFileSync(join(logs, "nul.jsonl"), codexSession("nul-session", ["before\u0000after"]));
+    const db = new LocalDb(join(root, "collector.sqlite"));
+    runCollectionPass({ db, projectId, trackingStartedAt, selectedRoots: [workFolder], logRoots: { codex: logs } });
+    const texts = db
+      .pendingEvents()
+      .flatMap((item) => (item.event.details.kind === "session.content_added" ? item.event.details.messages : []))
+      .map((message) => message.text);
+    expect(texts).toEqual(["beforeafter"]);
+    db.close();
+  });
+
+  it("pauses a session whose log was rewritten in place instead of reading from a shifted offset", () => {
+    const root = tempRoot();
+    const logs = join(root, "codex");
+    mkdirSync(logs);
+    const file = join(logs, "rewritten.jsonl");
+    const original = codexSession("rewritten-session", ["first"]);
+    writeFileSync(file, original);
+    const db = new LocalDb(join(root, "collector.sqlite"));
+    const input = { db, projectId, trackingStartedAt, selectedRoots: [workFolder], logRoots: { codex: logs } };
+    runCollectionPass(input);
+
+    writeFileSync(file, `${original.slice(0, -1)} and a longer line with no newline yet`);
+    const second = runCollectionPass(input);
+    expect(second.paused).toEqual(["codex:rewritten-session"]);
+    expect(db.pausedSessions(projectId)).toEqual([{ provider: "codex", sessionId: "rewritten-session", reason: "truncated" }]);
+    db.close();
+  });
+});
+
+describe("pairing", () => {
+  it("replaces the previous pairing when the helper is connected to another project", () => {
+    const db = new LocalDb(join(tempRoot(), "collector.sqlite"));
+    paired(db);
+    const otherProject = "44444444-4444-4444-8444-444444444444";
+    db.savePairing({ projectId: otherProject, trackingStartedAt, apiUrl: "http://127.0.0.1:1", deviceToken: "apm_other", deviceId: "device-other" });
+    expect(db.getPairing()).toMatchObject({ projectId: otherProject, deviceToken: "apm_other", deviceId: "device-other" });
+    expect(db.db.prepare("select count(*) as count from pairing").get()).toEqual({ count: 1 });
+    db.close();
   });
 });
 
@@ -253,6 +372,41 @@ describe("collector loop", () => {
     paired(db, "device-2");
     const repaired = await loop.tick();
     expect(repaired).toMatchObject({ needsPairing: false, queued: 0, lastError: null });
+    db.close();
+  });
+
+  it("drops queued events of a removed folder before the next upload", async () => {
+    const root = tempRoot();
+    const logs = join(root, "codex");
+    mkdirSync(logs);
+    writeFileSync(join(logs, "work.jsonl"), codexSession("removed-session", ["queued while offline"]));
+    const db = new LocalDb(join(root, "collector.sqlite"));
+    paired(db);
+    const folder = db.addFolder(projectId, workFolder, new Date().toISOString());
+    let online = false;
+    const requests: NormalizedEvent[][] = [];
+    let now = Date.parse("2026-09-25T15:00:00.000Z");
+    const loop = new CollectorLoop({
+      db,
+      logRoots: { codex: logs },
+      now: () => now,
+      transportFor: () => ({
+        async send(input) {
+          if (!online) {
+            throw new UploadError("Service unavailable", 503);
+          }
+          return acceptingTransport(requests).send(input);
+        },
+      }),
+    });
+    expect((await loop.tick()).queued).toBe(2);
+
+    db.setFolderEnabled(folder.id, false);
+    online = true;
+    now += uploadBackoffMs(1);
+    const after = await loop.tick();
+    expect(after).toMatchObject({ queued: 0, dropped: 2, lastError: null });
+    expect(requests).toEqual([]);
     db.close();
   });
 
