@@ -1,6 +1,6 @@
 import Database from "better-sqlite3";
 import { randomUUID } from "node:crypto";
-import type { NormalizedEvent } from "@apm/shared";
+import { matchingRoot, type NormalizedEvent } from "@apm/shared";
 
 export type FolderSelection = {
   id: string;
@@ -133,18 +133,17 @@ export class LocalDb {
     return value;
   }
 
+  /** The helper belongs to one project at a time, so a new pairing replaces the previous one. */
   savePairing(pairing: PairingRecord): void {
-    this.db
-      .prepare(
-        `insert into pairing (project_id, tracking_started_at, api_url, device_token, device_id)
-         values (@projectId, @trackingStartedAt, @apiUrl, @deviceToken, @deviceId)
-         on conflict (project_id) do update set
-           tracking_started_at = excluded.tracking_started_at,
-           api_url = excluded.api_url,
-           device_token = excluded.device_token,
-           device_id = excluded.device_id`,
-      )
-      .run(pairing);
+    const clear = this.db.prepare("delete from pairing");
+    const insert = this.db.prepare(
+      `insert into pairing (project_id, tracking_started_at, api_url, device_token, device_id)
+       values (@projectId, @trackingStartedAt, @apiUrl, @deviceToken, @deviceId)`,
+    );
+    this.db.transaction(() => {
+      clear.run();
+      insert.run(pairing);
+    })();
   }
 
   getPairing(): PairingRecord | null {
@@ -152,7 +151,7 @@ export class LocalDb {
       .prepare(
         `select project_id as projectId, tracking_started_at as trackingStartedAt, api_url as apiUrl,
                 device_token as deviceToken, device_id as deviceId
-         from pairing limit 1`,
+         from pairing order by rowid desc limit 1`,
       )
       .get() as PairingRecord | undefined;
     return row ?? null;
@@ -294,7 +293,7 @@ export class LocalDb {
       .prepare(
         `select event_id as eventId, project_id as projectId, provider, session_id as sessionId,
                 event_json as eventJson, attempt_count as attemptCount, queued_at as queuedAt
-         from outbox order by queued_at, event_id`,
+         from outbox order by queued_at, rowid`,
       )
       .all() as Array<{
       eventId: string;
@@ -316,6 +315,10 @@ export class LocalDb {
     }));
   }
 
+  pendingCount(): number {
+    return (this.db.prepare("select count(*) as count from outbox").get() as { count: number }).count;
+  }
+
   acknowledge(eventIds: string[]): void {
     const remove = this.db.prepare("delete from outbox where event_id = ?");
     const run = this.db.transaction(() => {
@@ -324,6 +327,51 @@ export class LocalDb {
       }
     });
     run();
+  }
+
+  discard(eventIds: string[]): void {
+    this.acknowledge(eventIds);
+  }
+
+  dropOtherProjects(projectId: string): number {
+    return this.db.prepare("delete from outbox where project_id <> ?").run(projectId).changes;
+  }
+
+  enabledRoots(projectId: string): string[] {
+    return this.folders()
+      .filter((folder) => folder.enabled && folder.projectId === projectId)
+      .map((folder) => folder.canonicalPath)
+      .sort();
+  }
+
+  /** Drops queued events of sessions whose working folder is no longer inside an enabled folder. */
+  dropUnselected(projectId: string, roots: readonly string[]): number {
+    const queued = this.db
+      .prepare(
+        `select distinct o.provider, o.session_id as sessionId, c.working_folder as workingFolder
+         from outbox o
+         left join session_checkpoints c
+           on c.provider = o.provider and c.session_id = o.session_id and c.project_id = o.project_id
+         where o.project_id = ?`,
+      )
+      .all(projectId) as Array<{ provider: string; sessionId: string; workingFolder: string | null }>;
+    let dropped = 0;
+    for (const session of queued) {
+      if (session.workingFolder === null || matchingRoot(session.workingFolder, [...roots]) === null) {
+        dropped += this.dropQueuedSession(session.provider, session.sessionId);
+      }
+    }
+    return dropped;
+  }
+
+  pausedSessions(projectId: string): Array<{ provider: string; sessionId: string; reason: string | null }> {
+    return this.db
+      .prepare(
+        `select provider, session_id as sessionId, pause_reason as reason
+         from session_checkpoints where project_id = ? and paused = 1
+         order by provider, session_id`,
+      )
+      .all(projectId) as Array<{ provider: string; sessionId: string; reason: string | null }>;
   }
 
   recordFailure(eventIds: string[], message: string): void {

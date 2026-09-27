@@ -130,6 +130,44 @@ describe("day 2 collection", () => {
     expect(after.status).toBe(401);
   });
 
+  it("refuses an event id stored for another project and a NUL character without failing the batch", async () => {
+    const otherName = "acme/day2-other";
+    await pool.query("delete from workspaces where name = $1", [otherName]);
+    const other = await pool.query<{ id: string }>(
+      `with w as (insert into workspaces (name) values ($1) returning id)
+       insert into projects (workspace_id, github_repo_id, github_owner, github_name, tracking_started_at)
+       select id, $2, 'acme', 'day2-other', now() - interval '1 day' from w
+       returning id`,
+      [otherName, repoId + 1],
+    );
+    try {
+      const project = await pool.query<{ tracking_started_at: Date }>("select tracking_started_at from projects where id = $1", [projectId]);
+      const createdAt = new Date((project.rows[0]?.tracking_started_at.getTime() ?? Date.now()) + 60_000).toISOString();
+      const shared = event({ eventId: "codex:day2-shared-session:started", createdAt, text: null });
+      await pool.query(
+        `insert into normalized_events (event_id, source_key, project_id, source, kind, occurred_at, details, schema_version)
+         values ($1, $1, $2, 'codex', 'session.started', $3, $4::jsonb, 1)`,
+        [shared.eventId, other.rows[0]?.id, createdAt, JSON.stringify(shared.details)],
+      );
+      const nulBase = event({ eventId: "codex:day2-nul-session:started", createdAt, text: null });
+      const withNul = { ...nulBase, details: { ...nulBase.details, sourceVersion: "bad\u0000version" } };
+      const fine = event({ eventId: "codex:day2-fine-session:started", createdAt, text: null });
+
+      const response = await postEvents("day2-user", [shared, withNul, fine]);
+      expect(response.status).toBe(202);
+      const body = (await response.json()) as { acknowledged: string[]; rejected: Array<{ eventId: string; reason: string }> };
+      expect(body.acknowledged).toEqual([fine.eventId]);
+      expect(body.rejected).toEqual(
+        expect.arrayContaining([
+          { eventId: shared.eventId, reason: "event_id_in_other_project" },
+          { eventId: withNul.eventId, reason: "invalid_event" },
+        ]),
+      );
+    } finally {
+      await pool.query("delete from workspaces where name = $1", [otherName]);
+    }
+  });
+
   it("enriches a pull request from current GitHub state and keeps a known merge", async () => {
     pulls.set(8, {
       id: 5,
