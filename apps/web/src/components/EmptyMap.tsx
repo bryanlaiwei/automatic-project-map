@@ -25,11 +25,13 @@ function Step({ done, title, detail, action }: { done: boolean; title: string; d
 
 export function EmptyMap({
   pendingAnalysis,
+  helperConnected,
   onConnectHelper,
   onInvite,
   canInvite,
 }: {
   pendingAnalysis: number;
+  helperConnected: boolean;
   onConnectHelper: () => void;
   onInvite: () => void;
   canInvite: boolean;
@@ -49,12 +51,16 @@ export function EmptyMap({
       <ul className="-mx-3 mt-5 space-y-0.5">
         <Step done title="Repository connected" detail="New pull requests and Actions runs show up automatically." />
         <Step
-          done={false}
+          done={helperConnected}
           title="Collect agent sessions"
-          detail="Run the local helper to include Codex, Claude Code and Cursor work from folders you choose."
+          detail={
+            helperConnected
+              ? "A local helper is connected. Sessions from its selected folders show up as they are collected."
+              : "Run the local helper to include Codex, Claude Code and Cursor work from folders you choose."
+          }
           action={
             <Button size="sm" icon={<Laptop className="size-3.5" />} onClick={onConnectHelper}>
-              Set up
+              {helperConnected ? "Manage" : "Set up"}
             </Button>
           }
         />

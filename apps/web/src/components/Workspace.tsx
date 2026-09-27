@@ -76,22 +76,40 @@ export function Workspace({
   useEffect(() => {
     tokenRef.current = token;
   }, [token]);
+  // The token and this callback change on every hourly session refresh; neither should reset the map.
+  const projectGoneRef = useRef(onProjectGone);
+  useEffect(() => {
+    projectGoneRef.current = onProjectGone;
+  }, [onProjectGone]);
+  const loadSeq = useRef(0);
+  const layoutEdits = useRef(0);
 
   const load = useCallback(async () => {
+    const seq = ++loadSeq.current;
+    const editsAtStart = layoutEdits.current;
     try {
       const [nextGraph, layout] = await Promise.all([api.graph(tokenRef.current, project.id), api.layout(tokenRef.current, project.id)]);
+      if (seq !== loadSeq.current) {
+        return;
+      }
       revisionRef.current = nextGraph.revision;
       setGraph(nextGraph);
-      setSaved(new Map(layout.positions.map((position) => [position.nodeId, { x: position.x, y: position.y }])));
+      // A card moved while this was loading keeps its new spot instead of the layout read before the move.
+      if (layoutEdits.current === editsAtStart) {
+        setSaved(new Map(layout.positions.map((position) => [position.nodeId, { x: position.x, y: position.y }])));
+      }
       setOffline(false);
     } catch (reason) {
+      if (seq !== loadSeq.current) {
+        return;
+      }
       if (reason instanceof ApiError && reason.status === 404) {
-        onProjectGone();
+        projectGoneRef.current();
         return;
       }
       setOffline(true);
     }
-  }, [project.id, onProjectGone]);
+  }, [project.id]);
 
   useEffect(() => {
     setGraph(null);
@@ -103,12 +121,22 @@ export function Workspace({
   useEffect(() => {
     const check = async () => {
       try {
-        const { revision } = await api.revision(tokenRef.current, project.id);
+        const status = await api.revision(tokenRef.current, project.id);
         setOffline(false);
-        if (revision !== revisionRef.current) {
+        if (status.revision !== revisionRef.current) {
           await load();
+          return;
         }
-      } catch {
+        setGraph((current) =>
+          current && (current.pendingAnalysis !== status.pendingAnalysis || current.pendingSince !== status.pendingSince)
+            ? { ...current, pendingAnalysis: status.pendingAnalysis, pendingSince: status.pendingSince }
+            : current,
+        );
+      } catch (reason) {
+        if (reason instanceof ApiError && reason.status === 404) {
+          projectGoneRef.current();
+          return;
+        }
         setOffline(true);
       }
     };
@@ -120,6 +148,26 @@ export function Workspace({
       window.removeEventListener("focus", onFocus);
     };
   }, [project.id, load]);
+
+  const mapEmpty = graph !== null && graph.features.length === 0;
+  const [helperConnected, setHelperConnected] = useState(false);
+  useEffect(() => {
+    if (!mapEmpty || settingsTab !== null) {
+      return;
+    }
+    let cancelled = false;
+    api
+      .settings(tokenRef.current, project.id)
+      .then((settings) => {
+        if (!cancelled) {
+          setHelperConnected(settings.devices.length > 0);
+        }
+      })
+      .catch(() => undefined);
+    return () => {
+      cancelled = true;
+    };
+  }, [mapEmpty, settingsTab, project.id]);
 
   useEffect(() => {
     if (!graph || !saved) {
@@ -135,6 +183,7 @@ export function Workspace({
       if (cancelled) {
         return;
       }
+      layoutEdits.current += 1;
       setSaved((current) => new Map([...(current ?? []), ...placed]));
       await api
         .saveLayout(
@@ -206,6 +255,7 @@ export function Workspace({
   const moveFeature = useCallback(
     (featureId: string, drop: XY) => {
       const position = freeSpot(featureId, drop, saved ?? new Map());
+      layoutEdits.current += 1;
       setSaved((current) => new Map([...(current ?? []), [featureId, position]]));
       void api.saveLayout(token, project.id, [{ nodeId: featureId, ...position }]).catch(() => toast("Could not save the new position.", "error"));
     },
@@ -217,6 +267,7 @@ export function Workspace({
       return;
     }
     const placed = await tidyLayout(graph.features, graph.relationships);
+    layoutEdits.current += 1;
     setSaved(placed);
     try {
       await api.saveLayout(
@@ -354,6 +405,7 @@ export function Workspace({
             empty={
               <EmptyMap
                 pendingAnalysis={graph.pendingAnalysis}
+                helperConnected={helperConnected}
                 onConnectHelper={() => setSettingsTab("helper")}
                 onInvite={() => setSettingsTab("members")}
                 canInvite={project.role === "owner"}

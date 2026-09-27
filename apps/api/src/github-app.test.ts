@@ -26,7 +26,7 @@ describe("GitHub App repository check", () => {
         return jsonResponse(500, {});
       },
     });
-    const result = await check({ owner: "acme", name: "app", repoId: 9 });
+    const result = await check({ owner: "acme", name: "app", repoId: 9, login: "alice" });
     expect(result.status).toBe("not_configured");
     if (result.status === "not_configured") {
       expect(result.message).toMatch(/GITHUB_APP_ID/);
@@ -55,14 +55,43 @@ describe("GitHub App repository check", () => {
         if (url.endsWith("/access_tokens")) {
           return jsonResponse(201, { token: "ghs_test" });
         }
+        if (url.endsWith("/collaborators/alice/permission")) {
+          return jsonResponse(200, { permission: "admin" });
+        }
         return jsonResponse(200, { id: 99, full_name: "acme/app" });
       },
     });
 
-    await expect(check({ owner: "acme", name: "app", repoId: 99 })).resolves.toEqual({ status: "accessible", repoId: 99 });
-    await expect(check({ owner: "acme", name: "app", repoId: 100 })).resolves.toEqual({ status: "denied" });
-    await expect(check({ owner: "acme", name: "app" })).resolves.toEqual({ status: "accessible", repoId: 99 });
+    await expect(check({ owner: "acme", name: "app", repoId: 99, login: "alice" })).resolves.toEqual({ status: "accessible", repoId: 99 });
+    await expect(check({ owner: "acme", name: "app", repoId: 100, login: "alice" })).resolves.toEqual({ status: "denied" });
+    await expect(check({ owner: "acme", name: "app", login: "alice" })).resolves.toEqual({ status: "accessible", repoId: 99 });
     expect(seen.some((call) => call.includes("/repos/acme/app/installation"))).toBe(true);
+  });
+
+  it("refuses someone who cannot push to the repository, or who did not sign in with GitHub", async () => {
+    const check = createGithubRepositoryAccessCheck({
+      appId: "12345",
+      privateKey: privateKey,
+      fetchImpl: async (input) => {
+        const url = String(input);
+        if (url.endsWith("/installation")) {
+          return jsonResponse(200, { id: 77 });
+        }
+        if (url.endsWith("/access_tokens")) {
+          return jsonResponse(201, { token: "ghs_test" });
+        }
+        if (url.endsWith("/collaborators/reader/permission")) {
+          return jsonResponse(200, { permission: "read" });
+        }
+        if (url.endsWith("/collaborators/stranger/permission")) {
+          return jsonResponse(404, { message: "Not Found" });
+        }
+        return jsonResponse(200, { id: 99, full_name: "acme/app" });
+      },
+    });
+    await expect(check({ owner: "acme", name: "app", login: "reader" })).resolves.toMatchObject({ status: "not_permitted" });
+    await expect(check({ owner: "acme", name: "app", login: "stranger" })).resolves.toMatchObject({ status: "not_permitted" });
+    await expect(check({ owner: "acme", name: "app", login: null })).resolves.toMatchObject({ status: "not_permitted" });
   });
 
   it("denies a repository the App is not installed on", async () => {
@@ -71,6 +100,6 @@ describe("GitHub App repository check", () => {
       privateKey: privateKey,
       fetchImpl: async () => jsonResponse(404, { message: "Not Found" }),
     });
-    await expect(check({ owner: "acme", name: "missing", repoId: 5 })).resolves.toEqual({ status: "denied" });
+    await expect(check({ owner: "acme", name: "missing", repoId: 5, login: "alice" })).resolves.toEqual({ status: "denied" });
   });
 });

@@ -191,6 +191,10 @@ export async function removeMember(
       `update collector_tokens set revoked_at = now() where project_id = $1 and user_id = $2 and revoked_at is null`,
       [input.projectId, input.userId],
     );
+    await client.query(`delete from collector_pairing_codes where project_id = $1 and user_id = $2 and used_at is null`, [
+      input.projectId,
+      input.userId,
+    ]);
     return { status: "removed" as const };
   });
 }
@@ -214,9 +218,18 @@ export async function revokeDevice(
   return "revoked";
 }
 
-/** A project is its workspace's only repository, so deleting it removes the workspace and everything stored for it. */
+/**
+ * A project is its workspace's only repository, so deleting it removes the workspace and everything stored
+ * for it. Raw webhook payloads are keyed by repository rather than project, so they are removed explicitly.
+ */
 export async function deleteProject(pool: Pool, projectId: string): Promise<void> {
-  await pool.query(`delete from workspaces where id = (select workspace_id from projects where id = $1)`, [projectId]);
+  await inTransaction(pool, async (client) => {
+    await client.query(
+      `delete from webhook_deliveries where github_repo_id = (select github_repo_id from projects where id = $1)`,
+      [projectId],
+    );
+    await client.query(`delete from workspaces where id = (select workspace_id from projects where id = $1)`, [projectId]);
+  });
 }
 
 export async function readSettings(pool: Pool, input: { projectId: string; userId: string; role: Role }): Promise<ProjectSettings | null> {
@@ -348,7 +361,9 @@ export async function readLayout(pool: Pool, projectId: string): Promise<NodePos
 }
 
 /** Saves positions for this project's features and ignores ids that are not one of them. */
-export async function saveLayout(pool: Pool, projectId: string, positions: readonly NodePosition[]): Promise<number> {
+export async function saveLayout(pool: Pool, projectId: string, requested: readonly NodePosition[]): Promise<number> {
+  // One upsert cannot touch a row twice, so a repeated node keeps its last position.
+  const positions = [...new Map(requested.map((position) => [position.nodeId, position])).values()];
   if (positions.length === 0) {
     return 0;
   }

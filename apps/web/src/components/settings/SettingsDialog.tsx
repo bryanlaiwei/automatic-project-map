@@ -435,7 +435,7 @@ function HelperTab({ token, settings, reload }: { token: string; settings: Proje
                     {device.pairedBy ? <span className="font-normal text-zinc-500"> · @{device.pairedBy}</span> : null}
                   </p>
                   <p className="text-xs text-zinc-500">
-                    {device.lastSeenAt ? `Last upload ${timeAgo(device.lastSeenAt, now)}` : "No uploads yet"} · connected {timeAgo(device.createdAt, now)}
+                    {device.lastSeenAt ? `Last seen ${timeAgo(device.lastSeenAt, now)}` : "Not seen since connecting"} · connected {timeAgo(device.createdAt, now)}
                   </p>
                 </div>
                 {device.yours || settings.role === "owner" ? (

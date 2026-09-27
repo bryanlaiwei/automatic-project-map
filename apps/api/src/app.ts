@@ -191,7 +191,7 @@ export function createApp(deps: AppDeps) {
       res.status(400).json({ error: "Enter the repository as owner/name." });
       return;
     }
-    const access = await deps.verifyRepositoryAccess(parsed.data);
+    const access = await deps.verifyRepositoryAccess({ ...parsed.data, login: user.githubLogin ?? null });
     switch (access.status) {
       case "accessible":
         break;
@@ -199,6 +199,9 @@ export function createApp(deps: AppDeps) {
         res.status(403).json({
           error: "The GitHub App is not installed on this repository, or the repository id does not match.",
         });
+        return;
+      case "not_permitted":
+        res.status(403).json({ error: access.message });
         return;
       case "not_configured":
       case "unavailable":

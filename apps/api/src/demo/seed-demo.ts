@@ -250,9 +250,17 @@ function scriptedInterpreter(): Interpreter {
 
 async function findUser(pool: Pool, who: string): Promise<string> {
   const result = await pool.query<{ id: string }>(
-    `select id from auth.users where lower(email) = lower($1) or lower(raw_user_meta_data->>'user_name') = lower($1)`,
+    `select u.id from auth.users u
+     where lower(u.email) = lower($1)
+        or exists (
+          select 1 from auth.identities i
+          where i.user_id = u.id and i.provider = 'github' and lower(i.identity_data->>'user_name') = lower($1)
+        )`,
     [who.replace(/^@/, "")],
   );
+  if (result.rows.length > 1) {
+    throw new Error(`More than one signed-in user matches "${who}". Use the account's email instead.`);
+  }
   const id = result.rows[0]?.id;
   if (!id) {
     throw new Error(`No signed-in user matches "${who}". Sign in to the web app once, then run this again.`);
@@ -260,11 +268,12 @@ async function findUser(pool: Pool, who: string): Promise<string> {
   return id;
 }
 
+/** The demo project uses a negative repository id, which no real GitHub repository has. */
 async function removeDemo(pool: Pool, userId: string): Promise<number> {
   const result = await pool.query(
     `delete from workspaces w
-     using memberships m
-     where m.workspace_id = w.id and m.user_id = $1 and w.name = $2`,
+     using memberships m, projects p
+     where m.workspace_id = w.id and p.workspace_id = w.id and m.user_id = $1 and w.name = $2 and p.github_repo_id < 0`,
     [userId, `${demoOwner}/${demoName}`],
   );
   return result.rowCount ?? 0;

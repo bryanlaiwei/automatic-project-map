@@ -25,13 +25,31 @@ export async function verifySupabaseUser(token: string): Promise<AuthUser | null
   if (typeof body !== "object" || body === null || !("id" in body) || typeof body.id !== "string") {
     return null;
   }
-  const metadata = "user_metadata" in body && typeof body.user_metadata === "object" && body.user_metadata !== null ? body.user_metadata : {};
+  const github = githubIdentity(body);
   return {
     id: body.id,
-    githubLogin: text(metadata, "user_name") ?? text(metadata, "preferred_username"),
-    name: text(metadata, "full_name") ?? text(metadata, "name"),
-    avatarUrl: text(metadata, "avatar_url"),
+    githubLogin: github ? (text(github, "user_name") ?? text(github, "preferred_username")) : null,
+    name: github ? (text(github, "full_name") ?? text(github, "name")) : null,
+    avatarUrl: github ? text(github, "avatar_url") : null,
   };
+}
+
+/**
+ * The GitHub account the user signed in with. Supabase fills `identities` from the provider at sign-in;
+ * `user_metadata` is not used because any signed-in user can rewrite it with `auth.updateUser`.
+ */
+function githubIdentity(body: object): object | null {
+  const identities = "identities" in body && Array.isArray(body.identities) ? (body.identities as unknown[]) : [];
+  for (const identity of identities) {
+    if (typeof identity !== "object" || identity === null) {
+      continue;
+    }
+    const record = identity as Record<string, unknown>;
+    if (record.provider === "github" && typeof record.identity_data === "object" && record.identity_data !== null) {
+      return record.identity_data;
+    }
+  }
+  return null;
 }
 
 function text(value: object, key: string): string | null {

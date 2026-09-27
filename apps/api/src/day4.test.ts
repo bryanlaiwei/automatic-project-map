@@ -131,12 +131,19 @@ describe("Day 4 membership, settings and layout", () => {
     };
     expect(settings.devices).toEqual([expect.objectContaining({ id: paired.deviceId, label: "mate laptop", pairedBy: "Day4-Mate" })]);
     expect(settings.devices[0]?.lastSeenAt).not.toBeNull();
+    const unusedCode = (await (await call("mate", `/projects/${projectId}/collector/pairing-codes`, { method: "POST" })).json()) as { code: string };
 
     expect((await call("mate", `/projects/${projectId}/members/${people.owner?.id}`, { method: "DELETE" })).status).toBe(403);
     expect((await call("owner", `/projects/${projectId}/members/${people.owner?.id}`, { method: "DELETE" })).status).toBe(409);
     expect((await call("owner", `/projects/${projectId}/members/${people.mate?.id}`, { method: "DELETE" })).status).toBe(204);
     expect((await call("mate", `/projects/${projectId}/graph`)).status).toBe(404);
     expect((await upload()).status).toBe(401);
+    const lateExchange = await fetch(`${baseUrl}/collector/pair`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ code: unusedCode.code }),
+    });
+    expect(lateExchange.status).toBe(401);
   });
 
   it("saves node positions for this project's features without changing the graph revision", async () => {
@@ -163,6 +170,14 @@ describe("Day 4 membership, settings and layout", () => {
     expect(after.revision).toBe(before.revision);
     expect((await call("stranger", `/projects/${projectId}/layout`, { method: "PUT", body: JSON.stringify({ positions: [] }) })).status).toBe(404);
     expect((await call("owner", `/projects/${projectId}/layout`, { method: "PUT", body: JSON.stringify({ positions: [{ nodeId: featureId, x: "left", y: 0 }] }) })).status).toBe(400);
+
+    const repeated = await call("owner", `/projects/${projectId}/layout`, {
+      method: "PUT",
+      body: JSON.stringify({ positions: [{ nodeId: featureId, x: 1, y: 1 }, { nodeId: featureId, x: 2, y: 3 }] }),
+    });
+    expect(await repeated.json()).toEqual({ saved: 1 });
+    const latest = (await (await call("owner", `/projects/${projectId}/layout`)).json()) as { positions: unknown[] };
+    expect(latest.positions).toEqual([{ nodeId: featureId, x: 2, y: 3 }]);
   });
 
   it("lets only an owner delete the project, which removes its data", async () => {
@@ -170,11 +185,19 @@ describe("Day 4 membership, settings and layout", () => {
     const invitationId = ((await invited.json()) as { id: string }).id;
     expect((await call("mate", `/invitations/${invitationId}/accept`, { method: "POST" })).status).toBe(201);
     expect((await call("mate", `/projects/${projectId}`, { method: "DELETE" })).status).toBe(403);
+    await pool.query(
+      `insert into webhook_deliveries (delivery_id, event_name, github_repo_id, payload, status)
+       values ('day4-delete-payload', 'pull_request', $1, '{"pull_request":{"title":"private"}}'::jsonb, 'processed')
+       on conflict (delivery_id) do nothing`,
+      [repoId],
+    );
 
     expect((await call("owner", `/projects/${projectId}`, { method: "DELETE" })).status).toBe(204);
     expect((await call("owner", `/projects/${projectId}/graph`)).status).toBe(404);
     const left = await pool.query(`select 1 from feature_groups where project_id = $1`, [projectId]);
     expect(left.rowCount).toBe(0);
+    const payloads = await pool.query(`select 1 from webhook_deliveries where github_repo_id = $1`, [repoId]);
+    expect(payloads.rowCount).toBe(0);
     expect((await (await call("owner", "/projects")).json()) as unknown).toEqual({ projects: [] });
   });
 });

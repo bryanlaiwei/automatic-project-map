@@ -219,7 +219,8 @@ export const api = {
     request<{ projectId: string }>(`/invitations/${invitationId}/accept`, token, { method: "POST" }),
 
   graph: (token: string, projectId: string) => request<Graph>(`/projects/${projectId}/graph`, token),
-  revision: (token: string, projectId: string) => request<{ revision: number | null }>(`/projects/${projectId}/graph/revision`, token),
+  revision: (token: string, projectId: string) =>
+    request<{ revision: number | null; pendingAnalysis: number; pendingSince: string | null }>(`/projects/${projectId}/graph/revision`, token),
   workItem: (token: string, projectId: string, id: string) =>
     request<{ revision: number; workItem: WorkItemDetail }>(`/projects/${projectId}/work-items/${id}`, token),
   feature: (token: string, projectId: string, id: string) =>

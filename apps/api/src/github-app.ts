@@ -3,15 +3,22 @@ import { createSign } from "node:crypto";
 export type RepositoryAccess =
   | { status: "accessible"; repoId?: number }
   | { status: "denied" }
+  | { status: "not_permitted"; message: string }
   | { status: "not_configured"; message: string }
   | { status: "unavailable"; message: string };
 
-/** Without a repoId, the check reports the id GitHub has for owner/name. */
+/**
+ * Without a repoId, the check reports the id GitHub has for owner/name. `login` is the signed-in person's
+ * GitHub account, which must be able to push to the repository.
+ */
 export type RepositoryAccessCheck = (input: {
   owner: string;
   name: string;
   repoId?: number | undefined;
+  login: string | null;
 }) => Promise<RepositoryAccess>;
+
+const connectingPermissions = new Set(["admin", "write"]);
 
 const githubApi = "https://api.github.com";
 
@@ -21,12 +28,15 @@ export function createGithubRepositoryAccessCheck(input: {
   fetchImpl?: typeof fetch;
 }): RepositoryAccessCheck {
   const fetchImpl = input.fetchImpl ?? fetch;
-  return async ({ owner, name, repoId }) => {
+  return async ({ owner, name, repoId, login }) => {
     if (input.appId.trim() === "" || input.privateKey.trim() === "") {
       return {
         status: "not_configured",
         message: "GitHub App credentials are not configured. Set GITHUB_APP_ID and GITHUB_APP_PRIVATE_KEY.",
       };
+    }
+    if (login === null) {
+      return { status: "not_permitted", message: "Sign in with GitHub to connect a repository." };
     }
 
     try {
@@ -75,7 +85,18 @@ export function createGithubRepositoryAccessCheck(input: {
       if (confirmedId === null || (repoId !== undefined && confirmedId !== repoId)) {
         return { status: "denied" };
       }
-      return { status: "accessible", repoId: confirmedId };
+      const permission = await githubRequest(fetchImpl, `${repoPath}/collaborators/${encodeURIComponent(login)}/permission`, token, "GET");
+      const level =
+        typeof permission.body === "object" && permission.body !== null && "permission" in permission.body
+          ? permission.body.permission
+          : null;
+      if (permission.ok && typeof level === "string" && connectingPermissions.has(level)) {
+        return { status: "accessible", repoId: confirmedId };
+      }
+      if (permission.ok || permission.status === 404 || permission.status === 403) {
+        return { status: "not_permitted", message: `@${login} needs write access to ${owner}/${name} on GitHub to connect it.` };
+      }
+      return { status: "unavailable", message: "GitHub did not confirm your access to this repository." };
     } catch (error) {
       const message = error instanceof Error ? error.message : "GitHub App authentication failed.";
       return { status: "unavailable", message };

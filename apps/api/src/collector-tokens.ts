@@ -40,8 +40,9 @@ export async function exchangePairingCode(
       `select c.project_id, c.user_id, p.tracking_started_at
        from collector_pairing_codes c
        join projects p on p.id = c.project_id
+       join memberships m on m.workspace_id = p.workspace_id and m.user_id = c.user_id
        where c.code_hash = $1 and c.used_at is null and c.expires_at > $2
-       for update`,
+       for update of c`,
       [hashCollectorSecret(input.code), now.toISOString()],
     );
     const row = found.rows[0];
