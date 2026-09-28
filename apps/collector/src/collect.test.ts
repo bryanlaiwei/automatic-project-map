@@ -6,7 +6,7 @@ import { fileURLToPath } from "node:url";
 import { parseClaudeCodeSession } from "./adapters/claude-code.js";
 import { parseCodexSession, parseJsonLines } from "./adapters/codex.js";
 import { parseCursorSession } from "./adapters/cursor.js";
-import { collectSession, eventsFromParsedSession } from "./collect.js";
+import { collectSession, eventsFromParsedSession } from "./parse-file.js";
 
 const fixtures = join(dirname(fileURLToPath(import.meta.url)), "../fixtures");
 const projectId = "22222222-2222-4222-8222-222222222222";

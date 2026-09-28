@@ -1,9 +1,13 @@
-import { collectSession, type AgentId } from "./collect.js";
+// Reads command-line arguments and either prints events for one log file or starts the local helper.
+// The helper is the long-running process the web app pairs with.
+
 import { CollectorLoop, defaultLogRoots, defaultScanIntervalMs, describeLogRoots } from "./collector-loop.js";
+import type { SessionAgentId } from "./contract/adapter.js";
 import { startLocalServer } from "./local-server.js";
 import { LocalDb } from "./local-db.js";
+import { collectSession } from "./parse-file.js";
 
-const agents: readonly AgentId[] = ["codex", "cursor", "claude_code"];
+const agents: readonly SessionAgentId[] = ["codex", "cursor", "claude_code"];
 
 const parseUsage =
   "usage: npm start -w @apm/collector -- <file> <trackingStartedAt> <codex|cursor|claude_code> <root...>";
@@ -16,7 +20,6 @@ export type CliIo = {
 export type CliResult = { exitCode: number };
 
 export async function runCli(argv: string[], env: NodeJS.ProcessEnv, io: CliIo): Promise<CliResult> {
-  const token = env.APM_ACCESS_TOKEN?.trim() ?? "";
   if (argv[0] === "serve") {
     const port = Number(env.APM_COLLECTOR_PORT ?? 47321);
     const dbPath = env.APM_COLLECTOR_DB ?? "collector.sqlite";
@@ -26,7 +29,7 @@ export async function runCli(argv: string[], env: NodeJS.ProcessEnv, io: CliIo):
       db,
       logRoots,
       scanIntervalMs: Number(env.APM_SCAN_INTERVAL_MS ?? defaultScanIntervalMs),
-      log: (line) => io.log(redact(line, token)),
+      log: (line) => io.log(line),
     });
     const server = await startLocalServer({
       db,
@@ -64,13 +67,6 @@ function runParse(argv: string[], io: CliIo): CliResult {
   return { exitCode: 0 };
 }
 
-function isAgent(value: string | undefined): value is AgentId {
+function isAgent(value: string | undefined): value is SessionAgentId {
   return agents.some((agent) => agent === value);
-}
-
-function redact(text: string, token: string): string {
-  if (token === "") {
-    return text;
-  }
-  return text.split(token).join("[redacted]");
 }

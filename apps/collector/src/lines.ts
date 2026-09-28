@@ -1,3 +1,6 @@
+// Byte helpers for a growing log: which file identity a checkpoint belongs to, and where the last complete line ends.
+// A trailing partial line is left unread until the agent writes its newline.
+
 import { statSync } from "node:fs";
 
 export function fileGeneration(filePath: string): string {

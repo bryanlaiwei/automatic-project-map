@@ -1,3 +1,6 @@
+// Remembers each log file's size and modification time so a scan can skip sessions that have not changed.
+// The remembered set is cleared when the paired project or the selected folders change.
+
 import { statSync } from "node:fs";
 
 export type FileChange = {

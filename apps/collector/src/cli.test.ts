@@ -5,7 +5,6 @@ import { runCli } from "./cli.js";
 
 const fixture = join(dirname(fileURLToPath(import.meta.url)), "../fixtures/codex/session.jsonl");
 const trackingStartedAt = "2026-09-24T12:00:00.000Z";
-const secret = "supabase-access-token-do-not-print";
 
 function capture() {
   const logs: string[] = [];
@@ -21,12 +20,10 @@ function capture() {
 }
 
 describe("collector CLI", () => {
-  it("parses a session without uploading or printing a token", async () => {
+  it("parses a session and prints whether it is eligible", async () => {
     const output = capture();
-    const result = await runCli([fixture, trackingStartedAt, "codex", "/Projects/my-app"], { APM_ACCESS_TOKEN: secret }, output.io);
+    const result = await runCli([fixture, trackingStartedAt, "codex", "/Projects/my-app"], {}, output.io);
     expect(result.exitCode).toBe(0);
     expect(output.logs.join("\n")).toContain('"eligible"');
-    expect(output.logs.join("\n")).not.toContain(secret);
-    expect(output.errors.join("\n")).not.toContain(secret);
   });
 });

@@ -1,10 +1,12 @@
+// Turns agent message content into the text that is uploaded.
+// The words a person wrote stay; hidden reasoning and large tool output are left out.
+
 type ContentBlock = {
   type?: string;
   text?: string;
   content?: unknown;
 };
 
-// Keep the words a person wrote. Drop hidden reasoning and large tool output.
 export function textFromContent(content: unknown): string {
   if (typeof content === "string") {
     return content;

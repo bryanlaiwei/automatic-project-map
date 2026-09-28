@@ -1,6 +1,12 @@
+// Reads Codex session jsonl files and turns them into messages.
+// The adapter object is the contract the scan can call; parseCodexText stays the function the scan calls today.
+
 import { readFileSync } from "node:fs";
+import { join } from "node:path";
+import type { AgentAdapter } from "../contract/adapter.js";
+import type { ParsedSession, SessionRecord } from "../contract/types.js";
+import { sessionLocators } from "../discover.js";
 import { textFromContent } from "../redact.js";
-import type { ParsedSession, SessionRecord } from "../types.js";
 
 type JsonRecord = Record<string, unknown>;
 
@@ -110,3 +116,16 @@ export function parseCodexText(text: string): ParsedSession {
     ambiguousFolder: false,
   };
 }
+
+export const codexAdapter: AgentAdapter = {
+  id: "codex",
+  logDirectory(env, home) {
+    return env.APM_CODEX_SESSIONS?.trim() || join(home, ".codex", "sessions");
+  },
+  discover(root) {
+    return sessionLocators("codex", root);
+  },
+  read(_locator, logBytes) {
+    return parseCodexText(logBytes.toString("utf8"));
+  },
+};

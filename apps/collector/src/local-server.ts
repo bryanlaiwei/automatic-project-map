@@ -1,7 +1,10 @@
+// HTTP server on this computer that the web app uses to pair, choose folders, and see helper status.
+// It accepts connections only from this machine.
+
 import { createServer, type IncomingMessage, type Server, type ServerResponse } from "node:http";
 import { realpathSync } from "node:fs";
 import type { AddressInfo } from "node:net";
-import type { LogRoots } from "./collect-pass.js";
+import type { LogRoots } from "./scan.js";
 import { describeLogRoots, type CollectorStatus } from "./collector-loop.js";
 import { LocalDb } from "./local-db.js";
 
