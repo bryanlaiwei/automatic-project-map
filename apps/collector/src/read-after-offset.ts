@@ -7,9 +7,9 @@ import { parseClaudeCodeText } from "./adapters/claude-code.js";
 import { parseCodexText } from "./adapters/codex.js";
 import { parseCursorText } from "./adapters/cursor.js";
 import type { SessionAgentId } from "./contract/adapter.js";
-import type { ParsedSession } from "./contract/types.js";
-import type { Discovered } from "./discover.js";
-import { completePrefixEnd } from "./lines.js";
+import type { ParsedSession } from "./contract/session.js";
+import type { Discovered } from "./find-sessions.js";
+import { completePrefixEnd } from "./log-bytes.js";
 
 export function sliceNewRecords(source: Discovered, savedOffset: string): Discovered {
   const offset = savedOffset === "" ? 0 : Number(savedOffset);

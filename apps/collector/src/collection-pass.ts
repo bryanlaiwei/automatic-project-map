@@ -5,9 +5,9 @@ import { evaluateSessionEligibility } from "@apm/shared";
 import { buildEvents } from "./build-events.js";
 import type { ChangeTracker } from "./change-tracker.js";
 import type { SessionAgentId } from "./contract/adapter.js";
-import { discoverSessions, type Discovered } from "./discover.js";
+import { discoverSessions, type Discovered } from "./find-sessions.js";
 import { LocalDb, type SessionCheckpoint } from "./local-db.js";
-import { sliceNewRecords } from "./read-new.js";
+import { sliceNewRecords } from "./read-after-offset.js";
 
 export type LogRoots = Partial<Record<SessionAgentId, string>>;
 

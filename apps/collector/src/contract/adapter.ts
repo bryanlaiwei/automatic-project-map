@@ -2,7 +2,7 @@
 // The id is an event source other than GitHub, so a new adapter does not compile until its name is in eventSources.
 
 import type { EventSource } from "@apm/shared";
-import type { ParsedSession } from "./types.js";
+import type { ParsedSession } from "./session.js";
 
 export type SessionAgentId = Exclude<EventSource, "github">;
 

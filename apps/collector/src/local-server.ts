@@ -4,7 +4,7 @@
 import { createServer, type IncomingMessage, type Server, type ServerResponse } from "node:http";
 import { realpathSync } from "node:fs";
 import type { AddressInfo } from "node:net";
-import type { LogRoots } from "./scan.js";
+import type { LogRoots } from "./collection-pass.js";
 import { describeLogRoots, type CollectorStatus } from "./collector-loop.js";
 import { LocalDb } from "./local-db.js";
 

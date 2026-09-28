@@ -3,12 +3,12 @@ import { mkdtempSync, realpathSync, symlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
-import { parseClaudeCodeSession } from "./adapters/claude-code.js";
-import { parseCodexSession, parseJsonLines } from "./adapters/codex.js";
-import { parseCursorSession } from "./adapters/cursor.js";
-import { collectSession, eventsFromParsedSession } from "./parse-file.js";
+import { parseClaudeCodeSession } from "../adapters/claude-code.js";
+import { parseCodexSession, parseJsonLines } from "../adapters/codex.js";
+import { parseCursorSession } from "../adapters/cursor.js";
+import { collectSession, eventsFromParsedSession } from "../parse-file.js";
 
-const fixtures = join(dirname(fileURLToPath(import.meta.url)), "../fixtures");
+const fixtures = join(dirname(fileURLToPath(import.meta.url)), "../../fixtures");
 const projectId = "22222222-2222-4222-8222-222222222222";
 const trackingStartedAt = "2026-09-24T12:00:00.000Z";
 
