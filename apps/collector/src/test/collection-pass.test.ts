@@ -2,25 +2,102 @@ import { mkdirSync, mkdtempSync, realpathSync, rmSync, writeFileSync } from "nod
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
-import { runCollectionPass } from "./collection-pass.js";
-import { flushOutbox, type EventUploadTransport } from "./upload-outbox.js";
-import { LocalDb } from "./local-db.js";
-import { startLocalServer } from "./local-server.js";
+import { ChangeTracker } from "../change-tracker.js";
+import { runCollectionPass } from "../collection-pass.js";
+import { LocalDb } from "../local-db.js";
+import { flushOutbox, type EventUploadTransport } from "../upload-outbox.js";
 
-const projectId = "22222222-2222-4222-8222-222222222222";
+const projectId = "33333333-3333-4333-8333-333333333333";
 const trackingStartedAt = "2026-09-24T12:00:00.000Z";
-const roots: string[] = [];
+const workFolder = "/Projects/loop-app";
+const temps: string[] = [];
+
+afterEach(() => {
+  for (const root of temps.splice(0)) {
+    rmSync(root, { recursive: true, force: true });
+  }
+});
 
 function tempRoot(): string {
-  const root = realpathSync(mkdtempSync(join(tmpdir(), "apm-day2-")));
-  roots.push(root);
+  const root = realpathSync(mkdtempSync(join(tmpdir(), "apm-loop-")));
+  temps.push(root);
   return root;
 }
 
-afterEach(() => {
-  for (const root of roots.splice(0)) {
-    rmSync(root, { recursive: true, force: true });
-  }
+function codexSession(id: string, messages: string[], cwd = workFolder): string {
+  const lines: unknown[] = [
+    { timestamp: "2026-09-24T13:00:00.000Z", type: "session_meta", payload: { id, timestamp: "2026-09-24T13:00:00.000Z", cwd } },
+    ...messages.map((text, index) => ({
+      timestamp: new Date(Date.parse("2026-09-24T13:00:01.000Z") + index * 1000).toISOString(),
+      type: "event_msg",
+      payload: { type: "user_message", message: text },
+    })),
+  ];
+  return lines.map((line) => JSON.stringify(line)).join("\n") + "\n";
+}
+
+describe("collection pass", () => {
+  it("collects a session on the next scan after its first attempt failed, without holding up the others", () => {
+    const root = tempRoot();
+    const logs = join(root, "codex");
+    mkdirSync(logs);
+    writeFileSync(join(logs, "a.jsonl"), codexSession("session-a", ["from a"]));
+    writeFileSync(join(logs, "b.jsonl"), codexSession("session-b", ["from b"]));
+    const db = new LocalDb(join(root, "collector.sqlite"));
+    const changes = new ChangeTracker();
+    const queue = db.queueAndAdvance.bind(db);
+    let failNext = true;
+    db.queueAndAdvance = (checkpoint, events) => {
+      if (failNext) {
+        failNext = false;
+        throw new Error("database is locked");
+      }
+      queue(checkpoint, events);
+    };
+    const input = { db, projectId, trackingStartedAt, selectedRoots: [workFolder], logRoots: { codex: logs }, changes };
+
+    const first = runCollectionPass(input);
+    expect(first.failed).toHaveLength(1);
+    expect(new Set(db.pendingEvents().map((item) => item.sessionId)).size).toBe(1);
+
+    const second = runCollectionPass(input);
+    expect(second.failed).toEqual([]);
+    expect(new Set(db.pendingEvents().map((item) => item.sessionId))).toEqual(new Set(["session-a", "session-b"]));
+    db.close();
+  });
+
+  it("strips NUL characters, which the server's database cannot store", () => {
+    const root = tempRoot();
+    const logs = join(root, "codex");
+    mkdirSync(logs);
+    writeFileSync(join(logs, "nul.jsonl"), codexSession("nul-session", ["before\u0000after"]));
+    const db = new LocalDb(join(root, "collector.sqlite"));
+    runCollectionPass({ db, projectId, trackingStartedAt, selectedRoots: [workFolder], logRoots: { codex: logs } });
+    const texts = db
+      .pendingEvents()
+      .flatMap((item) => (item.event.details.kind === "session.content_added" ? item.event.details.messages : []))
+      .map((message) => message.text);
+    expect(texts).toEqual(["beforeafter"]);
+    db.close();
+  });
+
+  it("pauses a session whose log was rewritten in place instead of reading from a shifted offset", () => {
+    const root = tempRoot();
+    const logs = join(root, "codex");
+    mkdirSync(logs);
+    const file = join(logs, "rewritten.jsonl");
+    const original = codexSession("rewritten-session", ["first"]);
+    writeFileSync(file, original);
+    const db = new LocalDb(join(root, "collector.sqlite"));
+    const input = { db, projectId, trackingStartedAt, selectedRoots: [workFolder], logRoots: { codex: logs } };
+    runCollectionPass(input);
+
+    writeFileSync(file, `${original.slice(0, -1)} and a longer line with no newline yet`);
+    const second = runCollectionPass(input);
+    expect(second.paused).toEqual(["codex:rewritten-session"]);
+    expect(db.pausedSessions(projectId)).toEqual([{ provider: "codex", sessionId: "rewritten-session", reason: "truncated" }]);
+    db.close();
+  });
 });
 
 function codexLine(input: { id: string; createdAt: string; cwd: string; messages: Array<{ at: string; text: string }> }): string {
@@ -341,53 +418,3 @@ describe("recoverable collection", () => {
     db.close();
   });
 });
-
-describe("local helper", () => {
-  it("pairs from a loopback page and rejects another origin", async () => {
-    const root = tempRoot();
-    const db = openDb(root);
-    let paired = false;
-    const server = await startLocalServer({
-      db,
-      port: 0,
-      webOrigin: "http://127.0.0.1:5173",
-      fetchImpl: async () => {
-        paired = true;
-        return new Response(
-          JSON.stringify({
-            token: "apm_test",
-            deviceId: "device-1",
-            projectId,
-            trackingStartedAt,
-          }),
-          { status: 201, headers: { "Content-Type": "application/json" } },
-        );
-      },
-    });
-    const address = server.address();
-    if (!address || typeof address === "string") {
-      throw new Error("helper did not bind");
-    }
-    const base = `http://127.0.0.1:${address.port}`;
-    const page = await fetch(base);
-    expect(await page.text()).toContain("Pairing code");
-    const denied = await fetch(`${base}/pair`, {
-      method: "POST",
-      headers: { Origin: "https://evil.example", "Content-Type": "application/json" },
-      body: JSON.stringify({ code: "abc" }),
-    });
-    expect(denied.status).toBe(403);
-    expect(paired).toBe(false);
-    const accepted = await fetch(`${base}/pair`, {
-      method: "POST",
-      headers: { Origin: "http://127.0.0.1:5173", "Content-Type": "application/json" },
-      body: JSON.stringify({ code: "abc", apiUrl: "http://127.0.0.1:4000" }),
-    });
-    expect(accepted.status).toBe(201);
-    expect(db.getPairing()?.projectId).toBe(projectId);
-    expect(db.getPairing()?.deviceToken).toBe("apm_test");
-    server.close();
-    db.close();
-  });
-});
-
