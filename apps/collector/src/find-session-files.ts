@@ -1,5 +1,5 @@
-// Finds session files under an agent's log directory and reads the ones the change tracker has not already seen.
-// Each result is the parsed session and the byte offset of its last complete line.
+// Finds the session log files and reads the ones that changed since last time.
+// Each result is the session plus how far the last full line goes.
 
 import { readdirSync, readFileSync, statSync, type Dirent } from "node:fs";
 import { join } from "node:path";
@@ -10,7 +10,7 @@ import { parseCursorText } from "./adapters/cursor.js";
 import type { ChangeTracker, FileChange } from "./change-tracker.js";
 import type { SessionAgentId, SessionLocator } from "./contract/adapter.js";
 import type { ParsedSession } from "./contract/types.js";
-import { completePrefixEnd, fileGeneration } from "./lines.js";
+import { completePrefixEnd, fileGeneration } from "./last-full-line.js";
 
 export type Discovered = {
   agent: SessionAgentId;

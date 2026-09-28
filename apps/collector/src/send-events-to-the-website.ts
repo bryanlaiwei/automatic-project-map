@@ -1,5 +1,5 @@
-// Sends queued events to the API and removes the ones the server accepts.
-// A failed upload leaves those events queued for a later try.
+// Sends the saved events to the website and deletes the ones the website accepts.
+// If sending fails, the events stay saved and we try again later.
 
 import { JSON_BODY_LIMIT_BYTES, type NormalizedEvent } from "@apm/shared";
 import type { LocalDb, OutboxEvent } from "./local-db.js";

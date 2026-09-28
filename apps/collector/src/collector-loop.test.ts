@@ -7,9 +7,9 @@ import { JSON_BODY_LIMIT_BYTES, type NormalizedEvent } from "@apm/shared";
 import { afterEach, describe, expect, it } from "vitest";
 import { ChangeTracker } from "./change-tracker.js";
 import { contentEventLimits } from "./build-events.js";
-import { runCollectionPass } from "./scan.js";
+import { runCollectionPass } from "./save-events-on-this-computer.js";
 import { CollectorLoop, defaultLogRoots, uploadBackoffMs } from "./collector-loop.js";
-import { flushOutbox, UploadError, uploadBatchLimits, type EventUploadTransport } from "./flush.js";
+import { flushOutbox, UploadError, uploadBatchLimits, type EventUploadTransport } from "./send-events-to-the-website.js";
 import { LocalDb } from "./local-db.js";
 import { startLocalServer } from "./local-server.js";
 
