@@ -10,9 +10,7 @@ import {
   type NormalizedEvent,
   type SessionMessage,
 } from "@apm/shared";
-import { parseClaudeCodeSession } from "./adapters/claude-code.js";
-import { parseCodexSession } from "./adapters/codex.js";
-import { parseCursorSession } from "./adapters/cursor.js";
+import { agentById } from "./agents.js";
 import { contentGroups } from "./build-events.js";
 import type { SessionAgentId } from "./contract/adapter.js";
 import type { ParsedSession } from "./contract/session.js";
@@ -163,25 +161,10 @@ function sessionEvents(input: {
   return events;
 }
 
-function parseSession(agent: SessionAgentId, filePath: string): ParsedSession {
-  switch (agent) {
-    case "codex":
-      return parseCodexSession(filePath);
-    case "claude_code":
-      return parseClaudeCodeSession(filePath);
-    case "cursor":
-      return parseCursorSession(filePath);
-    default: {
-      const unexpected: never = agent;
-      throw new Error(`Unknown agent: ${unexpected}`);
-    }
-  }
-}
-
 export function collectSession(input: CollectInput): CollectResult {
   return eventsFromParsedSession({
     ...input,
-    parsed: parseSession(input.agent, input.filePath),
+    parsed: agentById(input.agent).readPath(input.filePath),
     resolvePaths: true,
   });
 }

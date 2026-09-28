@@ -22,4 +22,6 @@ export interface AgentAdapter {
   discover(root: string): SessionLocator[];
   /** `logBytes` is the complete-line prefix of `locator.logFile`, or a suffix of it. */
   read(locator: SessionLocator, logBytes: Buffer): ParsedSession;
+  /** Reads one path given to the one-file parse command. A file for JSONL agents, a directory for Cursor. */
+  readPath(filePath: string): ParsedSession;
 }

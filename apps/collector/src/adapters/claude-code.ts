@@ -1,11 +1,10 @@
 // Reads Claude Code session jsonl files and turns them into messages.
-// The adapter object is the contract the scan can call; parseClaudeCodeText stays the function the scan calls today.
 
 import { readFileSync } from "node:fs";
 import { join } from "node:path";
 import type { AgentAdapter } from "../contract/adapter.js";
 import type { ParsedSession, SessionRecord } from "../contract/session.js";
-import { sessionLocators } from "../find-sessions.js";
+import { jsonlSessionLocators } from "../log-walk.js";
 import { textFromContent } from "../message-text.js";
 import { parseJsonLines } from "./codex.js";
 
@@ -81,9 +80,12 @@ export const claudeCodeAdapter: AgentAdapter = {
     return env.APM_CLAUDE_PROJECTS?.trim() || join(home, ".claude", "projects");
   },
   discover(root) {
-    return sessionLocators("claude_code", root);
+    return jsonlSessionLocators(root);
   },
   read(_locator, logBytes) {
     return parseClaudeCodeText(logBytes.toString("utf8"));
+  },
+  readPath(filePath) {
+    return parseClaudeCodeSession(filePath);
   },
 };
