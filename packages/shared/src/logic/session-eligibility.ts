@@ -1,5 +1,5 @@
 // Decides whether a local agent session is recent enough and inside a selected folder to be stored.
-import { matchingRoot } from "./folders.js";
+import { matchingRoot } from "./selected-folders.js";
 
 export const exclusionReasons = [
   "missing_creation_time",

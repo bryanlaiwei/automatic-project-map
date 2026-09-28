@@ -8,7 +8,7 @@ export {
   sessionMessageSchema,
 } from "./schema/events.js";
 export type { EventDetails, EventSource, NormalizedEvent, SessionMessage } from "./schema/events.js";
-export { evaluateSessionEligibility } from "./logic/eligibility.js";
-export type { ExclusionReason, SessionEligibility } from "./logic/eligibility.js";
-export { folderMatchesRoot, matchingRoot, normalizeAbsolutePath } from "./logic/folders.js";
+export { evaluateSessionEligibility } from "./logic/session-eligibility.js";
+export type { ExclusionReason, SessionEligibility } from "./logic/session-eligibility.js";
+export { folderMatchesRoot, matchingRoot, normalizeAbsolutePath } from "./logic/selected-folders.js";
 export { sessionContentEventId } from "./logic/session-content-id.js";
