@@ -1,6 +1,6 @@
 // Checks that a content event id stays the same for identical records and changes when a record is added.
 import { describe, expect, it } from "vitest";
-import { sessionContentEventId } from "./session-content-id.js";
+import { sessionContentEventId } from "../logic/session-content-id.js";
 
 function session(records: Array<{ id: string; text: string }>) {
   return {
