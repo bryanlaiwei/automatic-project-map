@@ -9,8 +9,8 @@ import { parseCodexText } from "./adapters/codex.js";
 import { parseCursorText } from "./adapters/cursor.js";
 import type { ChangeTracker, FileChange } from "./change-tracker.js";
 import type { SessionAgentId, SessionLocator } from "./contract/adapter.js";
-import type { ParsedSession } from "./contract/types.js";
-import { completePrefixEnd, fileGeneration } from "./lines.js";
+import type { ParsedSession } from "./contract/session.js";
+import { completePrefixEnd, fileGeneration } from "./log-bytes.js";
 
 export type Discovered = {
   agent: SessionAgentId;

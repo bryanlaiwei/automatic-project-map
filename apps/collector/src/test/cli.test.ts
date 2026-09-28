@@ -1,9 +1,9 @@
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { describe, expect, it } from "vitest";
-import { runCli } from "./cli.js";
+import { runCli } from "../cli.js";
 
-const fixture = join(dirname(fileURLToPath(import.meta.url)), "../fixtures/codex/session.jsonl");
+const fixture = join(dirname(fileURLToPath(import.meta.url)), "../../fixtures/codex/session.jsonl");
 const trackingStartedAt = "2026-09-24T12:00:00.000Z";
 
 function capture() {

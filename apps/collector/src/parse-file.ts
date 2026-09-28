@@ -15,7 +15,7 @@ import { parseCodexSession } from "./adapters/codex.js";
 import { parseCursorSession } from "./adapters/cursor.js";
 import { contentGroups } from "./build-events.js";
 import type { SessionAgentId } from "./contract/adapter.js";
-import type { ParsedSession } from "./contract/types.js";
+import type { ParsedSession } from "./contract/session.js";
 
 export type CollectInput = {
   agent: SessionAgentId;
