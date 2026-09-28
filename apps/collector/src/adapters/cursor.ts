@@ -1,7 +1,12 @@
+// Reads a Cursor session directory (session.json plus transcript.jsonl) and turns it into messages.
+// The adapter object is the contract the scan can call; parseCursorText stays the function the scan calls today.
+
 import { readFileSync } from "node:fs";
-import { join } from "node:path";
+import { basename, join } from "node:path";
+import type { AgentAdapter } from "../contract/adapter.js";
+import type { ParsedSession, SessionRecord } from "../contract/types.js";
+import { sessionLocators } from "../discover.js";
 import { textFromContent } from "../redact.js";
-import type { ParsedSession, SessionRecord } from "../types.js";
 import { parseJsonLines } from "./codex.js";
 
 type JsonRecord = Record<string, unknown>;
@@ -56,3 +61,18 @@ export function parseCursorText(metaText: string, transcript: string): ParsedSes
     ambiguousFolder: false,
   };
 }
+
+export const cursorAdapter: AgentAdapter = {
+  id: "cursor",
+  logDirectory(env, _home) {
+    return env.APM_CURSOR_SESSIONS?.trim() || undefined;
+  },
+  discover(root) {
+    return sessionLocators("cursor", root);
+  },
+  read(locator, logBytes) {
+    const sessionFile = locator.files.find((file) => basename(file) === "session.json");
+    const metaText = sessionFile === undefined ? "" : readFileSync(sessionFile, "utf8");
+    return parseCursorText(metaText, logBytes.toString("utf8"));
+  },
+};

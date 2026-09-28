@@ -1,6 +1,12 @@
+// Reads Claude Code session jsonl files and turns them into messages.
+// The adapter object is the contract the scan can call; parseClaudeCodeText stays the function the scan calls today.
+
 import { readFileSync } from "node:fs";
+import { join } from "node:path";
+import type { AgentAdapter } from "../contract/adapter.js";
+import type { ParsedSession, SessionRecord } from "../contract/types.js";
+import { sessionLocators } from "../discover.js";
 import { textFromContent } from "../redact.js";
-import type { ParsedSession, SessionRecord } from "../types.js";
 import { parseJsonLines } from "./codex.js";
 
 type JsonRecord = Record<string, unknown>;
@@ -68,3 +74,16 @@ export function parseClaudeCodeText(text: string): ParsedSession {
     ambiguousFolder: folders.size > 1,
   };
 }
+
+export const claudeCodeAdapter: AgentAdapter = {
+  id: "claude_code",
+  logDirectory(env, home) {
+    return env.APM_CLAUDE_PROJECTS?.trim() || join(home, ".claude", "projects");
+  },
+  discover(root) {
+    return sessionLocators("claude_code", root);
+  },
+  read(_locator, logBytes) {
+    return parseClaudeCodeText(logBytes.toString("utf8"));
+  },
+};

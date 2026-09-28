@@ -1,6 +1,7 @@
-import { runCli } from "./cli.js";
+// Starts the collector from the command line.
+// A successful serve command stays running; every other result exits with its status code.
 
-const token = process.env.APM_ACCESS_TOKEN?.trim() ?? "";
+import { runCli } from "./cli.js";
 
 void runCli(process.argv.slice(2), process.env, {
   log: (line) => console.log(line),
@@ -14,7 +15,7 @@ void runCli(process.argv.slice(2), process.env, {
   },
   (error: unknown) => {
     const message = error instanceof Error ? error.message : "Collector failed.";
-    console.error(token === "" ? message : message.split(token).join("[redacted]"));
+    console.error(message);
     process.exit(1);
   },
 );

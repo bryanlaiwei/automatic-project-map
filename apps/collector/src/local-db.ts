@@ -1,3 +1,6 @@
+// SQLite storage for pairing, selected folders, session checkpoints, and the upload queue.
+// Opening a database drops the unused discovery_state table left by older builds.
+
 import Database from "better-sqlite3";
 import { randomUUID } from "node:crypto";
 import { matchingRoot, type NormalizedEvent } from "@apm/shared";
@@ -86,12 +89,6 @@ create table if not exists outbox (
   queued_at text not null,
   last_error text
 );
-create table if not exists discovery_state (
-  provider text primary key,
-  discovery_cursor text,
-  last_scan text,
-  adapter_version text not null
-);
 create table if not exists pairing (
   project_id text primary key,
   tracking_started_at text not null,
@@ -115,6 +112,7 @@ export class LocalDb {
     this.db = new Database(filename);
     this.db.pragma("journal_mode = WAL");
     this.db.exec(schema);
+    this.db.exec("drop table if exists discovery_state");
   }
 
   close(): void {
@@ -386,16 +384,4 @@ export class LocalDb {
     run();
   }
 
-  noteDiscovery(provider: string, cursor: string, adapterVersion: string): void {
-    this.db
-      .prepare(
-        `insert into discovery_state (provider, discovery_cursor, last_scan, adapter_version)
-         values (?, ?, ?, ?)
-         on conflict (provider) do update set
-           discovery_cursor = excluded.discovery_cursor,
-           last_scan = excluded.last_scan,
-           adapter_version = excluded.adapter_version`,
-      )
-      .run(provider, cursor, new Date().toISOString(), adapterVersion);
-  }
 }

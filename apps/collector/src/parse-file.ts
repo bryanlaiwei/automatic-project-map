@@ -1,3 +1,6 @@
+// Reads one log file and prints whether that session is eligible and which events it would produce.
+// The thirty-second scan does not use this command.
+
 import { realpathSync } from "node:fs";
 import {
   evaluateSessionEligibility,
@@ -10,13 +13,12 @@ import {
 import { parseClaudeCodeSession } from "./adapters/claude-code.js";
 import { parseCodexSession } from "./adapters/codex.js";
 import { parseCursorSession } from "./adapters/cursor.js";
-import { contentGroups } from "./collect-pass.js";
-import type { ParsedSession } from "./types.js";
-
-export type AgentId = "codex" | "cursor" | "claude_code";
+import { contentGroups } from "./build-events.js";
+import type { SessionAgentId } from "./contract/adapter.js";
+import type { ParsedSession } from "./contract/types.js";
 
 export type CollectInput = {
-  agent: AgentId;
+  agent: SessionAgentId;
   filePath: string;
   projectId: string;
   trackingStartedAt: string;
@@ -47,7 +49,7 @@ function resolveSelectedRoots(roots: string[], resolvePaths: boolean): string[] 
 }
 
 export function eventsFromParsedSession(input: {
-  agent: AgentId;
+  agent: SessionAgentId;
   parsed: ParsedSession;
   projectId: string;
   trackingStartedAt: string;
@@ -110,7 +112,7 @@ export function eventsFromParsedSession(input: {
 
 function sessionEvents(input: {
   projectId: string;
-  agent: AgentId;
+  agent: SessionAgentId;
   sessionId: string;
   createdAt: string;
   sourceVersion: string | null;
@@ -161,7 +163,7 @@ function sessionEvents(input: {
   return events;
 }
 
-function parseSession(agent: AgentId, filePath: string): ParsedSession {
+function parseSession(agent: SessionAgentId, filePath: string): ParsedSession {
   switch (agent) {
     case "codex":
       return parseCodexSession(filePath);

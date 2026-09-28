@@ -1,7 +1,11 @@
+// Runs a scan and an upload about every thirty seconds while the helper is paired.
+// It skips the scan when no folders are selected and waits longer after an upload failure.
+
 import { homedir } from "node:os";
 import { join } from "node:path";
 import { ChangeTracker } from "./change-tracker.js";
-import { runCollectionPass, type AgentId, type LogRoots } from "./collect-pass.js";
+import type { SessionAgentId } from "./contract/adapter.js";
+import { runCollectionPass, type LogRoots } from "./scan.js";
 import { createFetchEventTransport, flushOutbox, type EventUploadTransport } from "./flush.js";
 import type { LocalDb, PairingRecord } from "./local-db.js";
 
@@ -35,7 +39,7 @@ export function defaultLogRoots(env: NodeJS.ProcessEnv, home: string = homedir()
 }
 
 export function describeLogRoots(roots: LogRoots): string[] {
-  const agents: AgentId[] = ["codex", "claude_code", "cursor"];
+  const agents: SessionAgentId[] = ["codex", "claude_code", "cursor"];
   return agents.flatMap((agent) => {
     const root = roots[agent];
     return root ? [`${agent}: ${root}`] : [];
