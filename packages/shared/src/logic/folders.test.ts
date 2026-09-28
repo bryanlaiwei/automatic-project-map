@@ -1,5 +1,6 @@
+// Checks that folder matching follows path parts, including a trailing slash and a parent selected with its child.
 import { describe, expect, it } from "vitest";
-import { folderMatchesRoot, matchingRoot, normalizeAbsolutePath } from "./index.js";
+import { folderMatchesRoot, matchingRoot, normalizeAbsolutePath } from "../index.js";
 
 describe("folder matching", () => {
   it("matches the selected root and folders inside it", () => {
