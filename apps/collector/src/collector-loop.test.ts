@@ -3,7 +3,7 @@ import { request } from "node:http";
 import type { AddressInfo } from "node:net";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { SESSION_CHUNK_REQUEST_LIMIT_BYTES, type NormalizedEvent } from "@apm/shared";
+import { JSON_BODY_LIMIT_BYTES, type NormalizedEvent } from "@apm/shared";
 import { afterEach, describe, expect, it } from "vitest";
 import { ChangeTracker } from "./change-tracker.js";
 import { contentEventLimits, runCollectionPass } from "./collect-pass.js";
@@ -78,7 +78,7 @@ describe("content event size", () => {
     expect(counts.reduce((sum, count) => sum + count, 0)).toBe(450);
     expect(Math.max(...counts)).toBeLessThanOrEqual(contentEventLimits.messages);
     for (const event of content) {
-      expect(Buffer.byteLength(JSON.stringify(event))).toBeLessThan(SESSION_CHUNK_REQUEST_LIMIT_BYTES);
+      expect(Buffer.byteLength(JSON.stringify(event))).toBeLessThan(JSON_BODY_LIMIT_BYTES);
     }
     const shortened = content
       .flatMap((event) => (event.details.kind === "session.content_added" ? event.details.messages : []))
@@ -113,7 +113,7 @@ describe("outbox upload", () => {
     expect(requests.length).toBeGreaterThan(1);
     for (const events of requests) {
       expect(events.length).toBeLessThanOrEqual(uploadBatchLimits.events);
-      expect(Buffer.byteLength(JSON.stringify({ projectId, events }))).toBeLessThan(SESSION_CHUNK_REQUEST_LIMIT_BYTES);
+      expect(Buffer.byteLength(JSON.stringify({ projectId, events }))).toBeLessThan(JSON_BODY_LIMIT_BYTES);
     }
     expect(db.pendingEvents()).toEqual([]);
     db.close();

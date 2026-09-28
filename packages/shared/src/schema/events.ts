@@ -1,6 +1,10 @@
+// Event contract shared by the API and the collector: the five event kinds, the schema version, and the JSON body limit.
+// SCHEMA_VERSION is the shape version an event uses. JSON_BODY_LIMIT_BYTES is how large one JSON request carrying events may be.
 import { z } from "zod";
 
 export const SCHEMA_VERSION = 1;
+
+export const JSON_BODY_LIMIT_BYTES = 512 * 1024;
 
 export const eventSources = ["github", "codex", "cursor", "claude_code"] as const;
 export const eventSourceSchema = z.enum(eventSources);

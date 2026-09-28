@@ -1,5 +1,6 @@
+// Checks the eligible result and each reason a session is left out.
 import { describe, expect, it } from "vitest";
-import { evaluateSessionEligibility } from "./index.js";
+import { evaluateSessionEligibility } from "../index.js";
 
 const trackingStartedAt = "2026-09-24T12:00:00.000Z";
 const selectedRoots = ["/Projects/my-app"];

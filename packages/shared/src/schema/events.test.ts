@@ -1,5 +1,6 @@
+// Checks that a stored event is accepted for a real kind and rejected when the source does not match that kind.
 import { describe, expect, it } from "vitest";
-import { normalizedEventSchema, SCHEMA_VERSION } from "./index.js";
+import { normalizedEventSchema, SCHEMA_VERSION } from "../index.js";
 
 const projectId = "11111111-1111-4111-8111-111111111111";
 

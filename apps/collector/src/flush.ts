@@ -1,4 +1,4 @@
-import { SESSION_CHUNK_REQUEST_LIMIT_BYTES, type NormalizedEvent } from "@apm/shared";
+import { JSON_BODY_LIMIT_BYTES, type NormalizedEvent } from "@apm/shared";
 import type { LocalDb, OutboxEvent } from "./local-db.js";
 
 export type IngestAck = {
@@ -22,7 +22,7 @@ export class UploadError extends Error {
 /** The API accepts at most 100 events and a 512 KiB JSON body per request. */
 export const uploadBatchLimits = {
   events: 100,
-  bytes: SESSION_CHUNK_REQUEST_LIMIT_BYTES - 64 * 1024,
+  bytes: JSON_BODY_LIMIT_BYTES - 64 * 1024,
 };
 
 export type FlushResult = {

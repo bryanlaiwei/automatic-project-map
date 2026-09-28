@@ -1,14 +1,16 @@
 import { realpathSync } from "node:fs";
 import {
-  buildSessionEvents,
   evaluateSessionEligibility,
-  ingestedSessionSchema,
-  type IngestedSession,
+  normalizedEventSchema,
+  SCHEMA_VERSION,
+  sessionContentEventId,
   type NormalizedEvent,
+  type SessionMessage,
 } from "@apm/shared";
 import { parseClaudeCodeSession } from "./adapters/claude-code.js";
 import { parseCodexSession } from "./adapters/codex.js";
 import { parseCursorSession } from "./adapters/cursor.js";
+import { contentGroups } from "./collect-pass.js";
 import type { ParsedSession } from "./types.js";
 
 export type AgentId = "codex" | "cursor" | "claude_code";
@@ -95,19 +97,68 @@ export function eventsFromParsedSession(input: {
   return {
     eligible: true,
     reason: null,
-    events: buildSessionEvents({
+    events: sessionEvents({
       projectId: input.projectId,
-      session: {
-        source: input.agent,
-        sessionId,
-        createdAt,
-        workingFolder,
-        selectedRoots,
-        sourceVersion: input.parsed.sourceVersion,
-        records: input.parsed.records,
-      },
+      agent: input.agent,
+      sessionId,
+      createdAt,
+      sourceVersion: input.parsed.sourceVersion,
+      records: input.parsed.records,
     }),
   };
+}
+
+function sessionEvents(input: {
+  projectId: string;
+  agent: AgentId;
+  sessionId: string;
+  createdAt: string;
+  sourceVersion: string | null;
+  records: SessionMessage[];
+}): NormalizedEvent[] {
+  const startedId = `${input.agent}:${input.sessionId}:started`;
+  const events: NormalizedEvent[] = [
+    normalizedEventSchema.parse({
+      schemaVersion: SCHEMA_VERSION,
+      eventId: startedId,
+      sourceKey: startedId,
+      projectId: input.projectId,
+      source: input.agent,
+      occurredAt: input.createdAt,
+      details: {
+        kind: "session.started",
+        sessionId: input.sessionId,
+        createdAt: input.createdAt,
+        sourceVersion: input.sourceVersion,
+      },
+    }),
+  ];
+  for (const records of contentGroups(input.records)) {
+    const first = records[0];
+    if (!first) {
+      continue;
+    }
+    const contentId = sessionContentEventId(input.agent, input.sessionId, records);
+    events.push(
+      normalizedEventSchema.parse({
+        schemaVersion: SCHEMA_VERSION,
+        eventId: contentId,
+        sourceKey: contentId,
+        projectId: input.projectId,
+        source: input.agent,
+        occurredAt: first.occurredAt,
+        details: {
+          kind: "session.content_added",
+          sessionId: input.sessionId,
+          createdAt: input.createdAt,
+          sourceVersion: input.sourceVersion,
+          recordIds: records.map((record) => record.id),
+          messages: records,
+        },
+      }),
+    );
+  }
+  return events;
 }
 
 function parseSession(agent: AgentId, filePath: string): ParsedSession {
@@ -130,30 +181,5 @@ export function collectSession(input: CollectInput): CollectResult {
     ...input,
     parsed: parseSession(input.agent, input.filePath),
     resolvePaths: true,
-  });
-}
-
-export function loadIngestedSession(input: {
-  agent: AgentId;
-  filePath: string;
-  selectedRoots: string[];
-}): IngestedSession {
-  const parsed = parseSession(input.agent, input.filePath);
-  if (parsed.sessionId === null) {
-    throw new Error("This session has no id, so it cannot be uploaded.");
-  }
-  const workingFolder =
-    parsed.ambiguousFolder || parsed.workingFolder === null ? null : resolveFolder(parsed.workingFolder);
-  if (parsed.workingFolder !== null && !parsed.ambiguousFolder && workingFolder === null) {
-    throw new Error("The session working folder could not be resolved, so it was not uploaded.");
-  }
-  return ingestedSessionSchema.parse({
-    source: input.agent,
-    sessionId: parsed.sessionId,
-    createdAt: parsed.createdAt,
-    workingFolder,
-    selectedRoots: resolveSelectedRoots(input.selectedRoots, true),
-    sourceVersion: parsed.sourceVersion,
-    records: parsed.records,
   });
 }

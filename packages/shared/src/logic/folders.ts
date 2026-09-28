@@ -1,5 +1,5 @@
-// Compare folder paths by their parts, not by a raw string prefix.
-// "/Projects/my-app-copy" must not match the root "/Projects/my-app".
+// Compares a session working folder with the folders the user selected.
+// Matching uses path parts, so "/Projects/my-app-copy" does not match the root "/Projects/my-app".
 export function normalizeAbsolutePath(input: string): string | null {
   if (!input.startsWith("/")) {
     return null;

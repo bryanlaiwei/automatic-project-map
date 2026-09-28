@@ -39,6 +39,24 @@ describe("session samples", () => {
     expect(content.details.messages.map((message) => message.text).join(" ")).not.toContain("hidden");
   });
 
+  it("splits a long session into content groups instead of one event", () => {
+    const parsed = parseCodexSession(join(fixtures, "codex/session.jsonl"));
+    const records = Array.from({ length: 201 }, (_, index) => ({
+      id: `m${index}`,
+      role: "user" as const,
+      text: "note",
+      occurredAt: "2026-09-24T18:00:01.000Z",
+    }));
+    const result = collect("codex", { ...parsed, records }, ["/Projects/my-app"]);
+    const content = result.events.filter((event) => event.details.kind === "session.content_added");
+    expect(content).toHaveLength(2);
+    const first = content[0];
+    if (first?.details.kind !== "session.content_added") {
+      throw new Error("expected content");
+    }
+    expect(first.details.messages).toHaveLength(200);
+  });
+
   it("reads Claude Code and skips tool output", () => {
     const result = collect(
       "claude_code",

@@ -1,7 +1,7 @@
 import express, { type Request, type Response } from "express";
 import type { Pool } from "pg";
 import { z } from "zod";
-import { SCHEMA_VERSION, SESSION_CHUNK_REQUEST_LIMIT_BYTES, sessionAgentSchema } from "@apm/shared";
+import { JSON_BODY_LIMIT_BYTES, SCHEMA_VERSION } from "@apm/shared";
 import type { AuthUser } from "./auth.js";
 import type { GithubAccountLookup, RepositoryAccessCheck } from "./github-app.js";
 import { verifyGithubSignature } from "./github.js";
@@ -10,11 +10,9 @@ import { graphRouter } from "./graph/routes.js";
 import { workspaceRouter } from "./workspace-routes.js";
 import { listProjectRoles, projectRole, type Role } from "./workspace.js";
 import { ingestEvents } from "./ingest-events.js";
-import { acceptSessionChunk, getSessionUpload, resetSessionUpload, type SessionUploadView } from "./session-uploads.js";
 import {
   connectRepository,
   enqueueDelivery,
-  getProjectForUser,
   listEvents,
   listProjects,
   processQueuedDeliveries,
@@ -26,24 +24,6 @@ const connectBody = z.object({
   owner: z.string().trim().min(1),
   name: z.string().trim().min(1),
   repoId: z.number().int().positive().optional(),
-});
-
-const chunkBody = z.object({
-  projectId: z.string().uuid(),
-  source: sessionAgentSchema,
-  sessionId: z.string().min(1),
-  chunkIndex: z.number().int().nonnegative(),
-  chunkCount: z.number().int().positive(),
-  contentSha256: z.string().regex(/^[a-f0-9]{64}$/),
-  payload: z.string(),
-  replace: z.boolean().optional(),
-});
-
-const chunkQuery = z.object({
-  projectId: z.string().uuid(),
-  source: sessionAgentSchema,
-  sessionId: z.string().min(1),
-  contentSha256: z.string().regex(/^[a-f0-9]{64}$/).optional(),
 });
 
 export type AppDeps = {
@@ -180,7 +160,7 @@ export function createApp(deps: AppDeps) {
     res.status(202).json({ accepted: true, duplicate: false });
   });
 
-  app.use(express.json({ limit: SESSION_CHUNK_REQUEST_LIMIT_BYTES }));
+  app.use(express.json({ limit: JSON_BODY_LIMIT_BYTES }));
 
   app.post("/projects", async (req, res) => {
     const user = await requireUser(deps, req, res);
@@ -281,59 +261,6 @@ export function createApp(deps: AppDeps) {
     }),
   );
 
-  app.get("/ingest/sessions/chunks", async (req, res) => {
-    const user = await requireUser(deps, req, res);
-    if (!user) {
-      return;
-    }
-    const contentSha256 = singleQuery(req.query.contentSha256);
-    const parsed = chunkQuery.safeParse({
-      projectId: singleQuery(req.query.projectId),
-      source: singleQuery(req.query.source),
-      sessionId: singleQuery(req.query.sessionId),
-      ...(contentSha256 ? { contentSha256 } : {}),
-    });
-    if (!parsed.success) {
-      res.status(400).json({ error: "Session upload query is invalid." });
-      return;
-    }
-    const project = await getProjectForUser(deps.pool, user.id, parsed.data.projectId);
-    if (!project) {
-      res.status(404).json({ error: "Project not found." });
-      return;
-    }
-    const upload = await getSessionUpload(deps.pool, {
-      projectId: parsed.data.projectId,
-      source: parsed.data.source,
-      sessionId: parsed.data.sessionId,
-      contentSha256: parsed.data.contentSha256 ?? null,
-    });
-    res.json(uploadJson(upload));
-  });
-
-  app.delete("/ingest/sessions/chunks", async (req, res) => {
-    const user = await requireUser(deps, req, res);
-    if (!user) {
-      return;
-    }
-    const parsed = chunkQuery.omit({ contentSha256: true }).safeParse({
-      projectId: singleQuery(req.query.projectId),
-      source: singleQuery(req.query.source),
-      sessionId: singleQuery(req.query.sessionId),
-    });
-    if (!parsed.success) {
-      res.status(400).json({ error: "Session upload query is invalid." });
-      return;
-    }
-    const project = await getProjectForUser(deps.pool, user.id, parsed.data.projectId);
-    if (!project) {
-      res.status(404).json({ error: "Project not found." });
-      return;
-    }
-    await resetSessionUpload(deps.pool, parsed.data);
-    res.status(204).end();
-  });
-
   app.post("/projects/:projectId/collector/pairing-codes", async (req, res) => {
     const user = await requireUser(deps, req, res);
     if (!user) {
@@ -399,49 +326,6 @@ export function createApp(deps: AppDeps) {
     res.status(202).json(result);
   });
 
-  app.post("/ingest/sessions/chunks", async (req, res) => {
-    const user = await requireUser(deps, req, res);
-    if (!user) {
-      return;
-    }
-    const parsed = chunkBody.safeParse(req.body);
-    if (!parsed.success) {
-      res.status(400).json({ error: "Session chunk is invalid." });
-      return;
-    }
-    const payload = decodeChunkPayload(parsed.data.payload);
-    if (!payload) {
-      res.status(400).json({ error: "Session chunk payload is not base64." });
-      return;
-    }
-    const project = await getProjectForUser(deps.pool, user.id, parsed.data.projectId);
-    if (!project) {
-      res.status(404).json({ error: "Project not found." });
-      return;
-    }
-    const result = await acceptSessionChunk(deps.pool, {
-      projectId: parsed.data.projectId,
-      source: parsed.data.source,
-      sessionId: parsed.data.sessionId,
-      chunkIndex: parsed.data.chunkIndex,
-      chunkCount: parsed.data.chunkCount,
-      contentSha256: parsed.data.contentSha256,
-      payload,
-      replace: parsed.data.replace === true,
-    });
-    if (result.status === "conflict") {
-      res.status(409).json({
-        error: "This chunk does not match the upload already in progress. Resume that upload or reset it.",
-      });
-      return;
-    }
-    if (result.status === "invalid") {
-      res.status(400).json({ error: result.message });
-      return;
-    }
-    res.status(result.upload.complete ? 202 : 200).json(uploadJson(result.upload));
-  });
-
   return app;
 }
 
@@ -463,34 +347,4 @@ async function canIngest(
     return "unauthorized";
   }
   return (await userCanAccessProject(deps.pool, user.id, projectId)) ? "ok" : "forbidden";
-}
-
-function uploadJson(upload: SessionUploadView) {
-  return {
-    acknowledged: upload.acknowledged,
-    chunkCount: upload.chunkCount,
-    contentSha256: upload.contentSha256,
-    complete: upload.complete,
-    stored: upload.outcome?.stored ?? null,
-    reason: upload.outcome?.reason ?? null,
-    eventsStored: upload.outcome?.eventsStored ?? null,
-  };
-}
-
-function singleQuery(value: unknown): string | undefined {
-  return typeof value === "string" && value.length > 0 ? value : undefined;
-}
-
-function decodeChunkPayload(payload: string): Buffer | null {
-  if (payload.length === 0) {
-    return Buffer.alloc(0);
-  }
-  if (payload.length % 4 !== 0 || !/^[A-Za-z0-9+/]+={0,2}$/.test(payload)) {
-    return null;
-  }
-  const decoded = Buffer.from(payload, "base64");
-  if (decoded.toString("base64") !== payload) {
-    return null;
-  }
-  return decoded;
 }

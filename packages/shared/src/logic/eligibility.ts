@@ -1,3 +1,4 @@
+// Decides whether a local agent session is recent enough and inside a selected folder to be stored.
 import { matchingRoot } from "./folders.js";
 
 export const exclusionReasons = [
