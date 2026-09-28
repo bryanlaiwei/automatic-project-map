@@ -5,8 +5,8 @@ import { homedir } from "node:os";
 import { join } from "node:path";
 import { ChangeTracker } from "./change-tracker.js";
 import type { SessionAgentId } from "./contract/adapter.js";
-import { runCollectionPass, type LogRoots } from "./save-events-on-this-computer.js";
-import { createFetchEventTransport, flushOutbox, type EventUploadTransport } from "./send-events-to-the-website.js";
+import { runCollectionPass, type LogRoots } from "./collection-pass.js";
+import { createFetchEventTransport, flushOutbox, type EventUploadTransport } from "./upload-outbox.js";
 import type { LocalDb, PairingRecord } from "./local-db.js";
 
 export const defaultScanIntervalMs = 30_000;

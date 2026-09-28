@@ -1,5 +1,5 @@
-// Reads only the part of a session log that was added after the last time we looked.
-// That place is saved in the database column next_cursor.
+// Reads the bytes of a session log that come after the saved checkpoint.
+// The checkpoint is the byte offset stored in the next_cursor column.
 
 import { readFileSync } from "node:fs";
 import { join } from "node:path";
@@ -7,9 +7,9 @@ import { parseClaudeCodeText } from "./adapters/claude-code.js";
 import { parseCodexText } from "./adapters/codex.js";
 import { parseCursorText } from "./adapters/cursor.js";
 import type { SessionAgentId } from "./contract/adapter.js";
-import type { ParsedSession } from "./contract/types.js";
-import type { Discovered } from "./find-session-files.js";
-import { completePrefixEnd } from "./last-full-line.js";
+import type { ParsedSession } from "./contract/session.js";
+import type { Discovered } from "./find-sessions.js";
+import { completePrefixEnd } from "./log-bytes.js";
 
 export function sliceNewRecords(source: Discovered, savedOffset: string): Discovered {
   const offset = savedOffset === "" ? 0 : Number(savedOffset);

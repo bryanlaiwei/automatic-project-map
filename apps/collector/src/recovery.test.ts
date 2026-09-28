@@ -2,8 +2,8 @@ import { mkdirSync, mkdtempSync, realpathSync, rmSync, writeFileSync } from "nod
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
-import { runCollectionPass } from "./save-events-on-this-computer.js";
-import { flushOutbox, type EventUploadTransport } from "./send-events-to-the-website.js";
+import { runCollectionPass } from "./collection-pass.js";
+import { flushOutbox, type EventUploadTransport } from "./upload-outbox.js";
 import { LocalDb } from "./local-db.js";
 import { startLocalServer } from "./local-server.js";
 

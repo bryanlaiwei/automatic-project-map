@@ -1,5 +1,5 @@
-// Pulls out the words a person wrote in a chat message.
-// Hidden thinking and big tool output are left out.
+// Turns agent message content into the text that is uploaded.
+// The words a person wrote stay; hidden reasoning and large tool output are left out.
 
 type ContentBlock = {
   type?: string;

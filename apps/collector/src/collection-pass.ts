@@ -1,13 +1,13 @@
-// Decides which sessions count and saves their events in the database on this computer.
-// The saved place in the log moves forward only when those events are saved with it.
+// Decides which discovered sessions are eligible and writes their events to SQLite.
+// A checkpoint advances only together with the events queued for that session.
 
 import { evaluateSessionEligibility } from "@apm/shared";
 import { buildEvents } from "./build-events.js";
 import type { ChangeTracker } from "./change-tracker.js";
 import type { SessionAgentId } from "./contract/adapter.js";
-import { discoverSessions, type Discovered } from "./find-session-files.js";
+import { discoverSessions, type Discovered } from "./find-sessions.js";
 import { LocalDb, type SessionCheckpoint } from "./local-db.js";
-import { sliceNewRecords } from "./only-the-new-part.js";
+import { sliceNewRecords } from "./read-after-offset.js";
 
 export type LogRoots = Partial<Record<SessionAgentId, string>>;
 

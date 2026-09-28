@@ -1,5 +1,5 @@
-// Two questions about a log file: is this the same file as last time, and where does the last full line end.
-// A line that is still being written is skipped until it gets a newline.
+// Byte helpers for a growing log: which file identity a checkpoint belongs to, and where the last complete line ends.
+// A trailing partial line is left unread until the agent writes its newline.
 
 import { statSync } from "node:fs";
 
