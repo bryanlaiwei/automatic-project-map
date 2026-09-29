@@ -6,8 +6,8 @@ import {
   pullRequestNumbersForHead,
   savePullRequestObservation,
   saveWorkflowObservation,
-} from "./github-enrich.js";
-import { insertEvents, type GithubLookup } from "./store.js";
+  type GithubLookup,
+} from "./enrich.js";
 
 export const refreshLimits = {
   pullRequestsPerRun: 50,
@@ -19,6 +19,11 @@ export const refreshLimits = {
 export type RefreshResult = {
   checked: number;
   eventsStored: number;
+};
+
+export type RefreshOptions = {
+  projectId?: string;
+  writeEvents: (events: NormalizedEvent[]) => Promise<number>;
 };
 
 type ObservationRow = {
@@ -36,18 +41,23 @@ type ObservationRow = {
 export async function refreshObservedGithub(
   pool: Pool,
   github: GithubLookup,
-  options: { projectId?: string } = {},
+  options: RefreshOptions,
 ): Promise<RefreshResult> {
   const projectId = options.projectId ?? null;
-  const pullRequests = await refreshPullRequests(pool, github, projectId);
-  const runs = await refreshWorkflowRuns(pool, github, projectId);
+  const pullRequests = await refreshPullRequests(pool, github, projectId, options.writeEvents);
+  const runs = await refreshWorkflowRuns(pool, github, projectId, options.writeEvents);
   return {
     checked: pullRequests.checked + runs.checked,
     eventsStored: pullRequests.eventsStored + runs.eventsStored,
   };
 }
 
-async function refreshPullRequests(pool: Pool, github: GithubLookup, projectId: string | null): Promise<RefreshResult> {
+async function refreshPullRequests(
+  pool: Pool,
+  github: GithubLookup,
+  projectId: string | null,
+  writeEvents: RefreshOptions["writeEvents"],
+): Promise<RefreshResult> {
   const rows = await pool.query<ObservationRow>(
     `select o.project_id, o.source_id, o.head_sha, o.updated_at, o.state,
             p.github_repo_id, p.github_owner, p.github_name
@@ -97,12 +107,17 @@ async function refreshPullRequests(pool: Pool, github: GithubLookup, projectId: 
         updatedAt: snapshot.updatedAt,
       },
     });
-    eventsStored += await storeRefreshedEvent(pool, row.project_id, applyPullRequestSnapshot(base, snapshot));
+    eventsStored += await storeRefreshedEvent(pool, row.project_id, applyPullRequestSnapshot(base, snapshot), writeEvents);
   }
   return { checked: rows.rows.length, eventsStored };
 }
 
-async function refreshWorkflowRuns(pool: Pool, github: GithubLookup, projectId: string | null): Promise<RefreshResult> {
+async function refreshWorkflowRuns(
+  pool: Pool,
+  github: GithubLookup,
+  projectId: string | null,
+  writeEvents: RefreshOptions["writeEvents"],
+): Promise<RefreshResult> {
   const rows = await pool.query<ObservationRow>(
     `select o.project_id, o.source_id, o.head_sha, o.updated_at, o.state,
             p.github_repo_id, p.github_owner, p.github_name
@@ -144,7 +159,7 @@ async function refreshWorkflowRuns(pool: Pool, github: GithubLookup, projectId: 
       occurredAt: snapshot.updatedAt,
       details: { ...row.state, kind: "workflow.updated", jobId: null },
     });
-    eventsStored += await storeRefreshedEvent(pool, row.project_id, applyWorkflowSnapshot(base, snapshot));
+    eventsStored += await storeRefreshedEvent(pool, row.project_id, applyWorkflowSnapshot(base, snapshot), writeEvents);
   }
   return { checked: rows.rows.length, eventsStored };
 }
@@ -156,8 +171,13 @@ async function markRefreshed(pool: Pool, row: ObservationRow, kind: "pull_reques
   );
 }
 
-async function storeRefreshedEvent(pool: Pool, projectId: string, event: NormalizedEvent): Promise<number> {
-  const stored = await insertEvents(pool, [event]);
+async function storeRefreshedEvent(
+  pool: Pool,
+  projectId: string,
+  event: NormalizedEvent,
+  writeEvents: RefreshOptions["writeEvents"],
+): Promise<number> {
+  const stored = await writeEvents([event]);
   await savePullRequestObservation(pool, projectId, event);
   await saveWorkflowObservation(pool, projectId, event);
   return stored;

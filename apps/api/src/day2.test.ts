@@ -3,8 +3,8 @@ import { execFileSync } from "node:child_process";
 import type { Server } from "node:http";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { normalizedEventSchema, SCHEMA_VERSION } from "@apm/shared";
-import type { RepositoryAccess } from "./github-app.js";
-import { applyPullRequestSnapshot, preserveKnownMerge, snapshotFromPullRequest, snapshotFromWorkflow } from "./github-enrich.js";
+import type { RepositoryAccess } from "@apm/github-collector/access";
+import { applyPullRequestSnapshot, preserveKnownMerge, snapshotFromPullRequest, snapshotFromWorkflow } from "@apm/github-collector/enrich";
 import { loadEnvFile } from "./env.js";
 
 loadEnvFile();

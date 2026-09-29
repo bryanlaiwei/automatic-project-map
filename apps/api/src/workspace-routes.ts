@@ -2,7 +2,7 @@ import { Router, type Request, type Response } from "express";
 import type { Pool } from "pg";
 import { z } from "zod";
 import type { AuthUser } from "./auth.js";
-import type { GithubAccountLookup } from "./github-app.js";
+import type { GithubAccountLookup } from "@apm/github-collector/access";
 import {
   acceptInvitation,
   deleteProject,

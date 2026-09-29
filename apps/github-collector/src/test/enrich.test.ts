@@ -1,6 +1,6 @@
 import { generateKeyPairSync } from "node:crypto";
 import { describe, expect, it } from "vitest";
-import { createGithubEnricher } from "./github-enrich.js";
+import { createGithubEnricher } from "../enrich.js";
 
 const { privateKey } = generateKeyPairSync("rsa", {
   modulusLength: 2048,

@@ -6,8 +6,6 @@
     "./env": "./src/env.ts",
     "./db": "./src/db.ts",
     "./store": "./src/store.ts",
-    "./github-enrich": "./src/github-enrich.ts",
-    "./github-refresh": "./src/github-refresh.ts",
     "./graph/process": "./src/graph/process.ts",
     "./graph/openai-interpreter": "./src/graph/openai-interpreter.ts"
   },
@@ -21,6 +19,7 @@
     "demo:seed": "tsx src/demo/seed-demo.ts"
   },
   "dependencies": {
+    "@apm/github-collector": "*",
     "@apm/shared": "*",
     "express": "^5.1.0",
     "openai": "^7.23.0",

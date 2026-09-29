@@ -1,8 +1,9 @@
 import PgBoss from "pg-boss";
 import type { Pool } from "pg";
-import { refreshObservedGithub } from "@apm/api/github-refresh";
 import { dueProjects, processProject, type Interpreter, type ProcessResult } from "@apm/api/graph/process";
-import { processQueuedDeliveries, type GithubLookup } from "@apm/api/store";
+import { insertEvents, processQueuedDeliveries } from "@apm/api/store";
+import type { GithubLookup } from "@apm/github-collector/enrich";
+import { refreshObservedGithub } from "@apm/github-collector/refresh";
 
 export type WorkerJob = {
   name: string;
@@ -41,7 +42,9 @@ export function backgroundJobs(input: { pool: Pool; github: GithubLookup }): Wor
       name: "refresh-github",
       cron: "*/5 * * * *",
       async run() {
-        const result = await refreshObservedGithub(input.pool, input.github);
+        const result = await refreshObservedGithub(input.pool, input.github, {
+          writeEvents: (events) => insertEvents(input.pool, events),
+        });
         return `checked ${result.checked} open GitHub items, stored ${result.eventsStored} updates`;
       },
     },

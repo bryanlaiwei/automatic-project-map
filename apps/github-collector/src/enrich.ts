@@ -1,6 +1,6 @@
 import { normalizedEventSchema, type NormalizedEvent } from "@apm/shared";
 import type { Pool } from "pg";
-import { signGithubAppJwt } from "./github-app.js";
+import { signGithubAppJwt } from "./access.js";
 
 type JsonRecord = Record<string, unknown>;
 
@@ -27,6 +27,11 @@ export type WorkflowSnapshot = {
   updatedAt: string;
   pullRequestNumbers: number[];
   jobs: Array<{ jobId: number; name: string; status: string; conclusion: string | null; attempt: number }>;
+};
+
+export type GithubLookup = {
+  enrichPullRequest(owner: string, name: string, number: number): Promise<PullRequestSnapshot | null>;
+  enrichWorkflowRun(owner: string, name: string, runId: number): Promise<WorkflowSnapshot | null>;
 };
 
 export function applyPullRequestSnapshot(event: NormalizedEvent, snapshot: PullRequestSnapshot): NormalizedEvent {

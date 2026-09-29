@@ -1,7 +1,7 @@
 import { createHmac } from "node:crypto";
 import type { Server } from "node:http";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
-import type { RepositoryAccess } from "./github-app.js";
+import type { RepositoryAccess } from "@apm/github-collector/access";
 import { loadEnvFile } from "./env.js";
 
 loadEnvFile();
