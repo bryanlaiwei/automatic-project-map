@@ -1,5 +1,5 @@
 // Re-exports the event schemas and the shared decisions so other packages can import them from @apm/shared.
-export { JSON_BODY_LIMIT_BYTES, SCHEMA_VERSION } from "./schema/events.js";
+export { evidenceRowChars, JSON_BODY_LIMIT_BYTES, SCHEMA_VERSION } from "./schema/events.js";
 export {
   eventDetailsSchema,
   eventSourceSchema,

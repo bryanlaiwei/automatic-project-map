@@ -1,7 +1,7 @@
 import { mkdirSync, mkdtempSync, realpathSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { JSON_BODY_LIMIT_BYTES } from "@apm/shared";
+import { evidenceRowChars, JSON_BODY_LIMIT_BYTES } from "@apm/shared";
 import { afterEach, describe, expect, it } from "vitest";
 import { contentEventLimits } from "../build-events.js";
 import { runCollectionPass } from "../collection-pass.js";
@@ -37,7 +37,7 @@ function codexSession(id: string, messages: string[], cwd = workFolder): string 
 }
 
 describe("content event size", () => {
-  it("splits a long session into events the API accepts and shortens a huge message", () => {
+  it("splits a long session into events the API accepts and keeps a huge message whole across rows", () => {
     const root = tempRoot();
     const logs = join(root, "codex");
     mkdirSync(logs);
@@ -52,17 +52,20 @@ describe("content event size", () => {
       .pendingEvents()
       .map((item) => item.event)
       .filter((event) => event.details.kind === "session.content_added");
+    const storedMessages = content.flatMap((event) => (event.details.kind === "session.content_added" ? event.details.messages : []));
     const counts = content.map((event) => (event.details.kind === "session.content_added" ? event.details.messages.length : 0));
-    expect(counts.reduce((sum, count) => sum + count, 0)).toBe(450);
+    expect(counts.reduce((sum, count) => sum + count, 0)).toBe(449 + Math.ceil(100_000 / evidenceRowChars));
     expect(Math.max(...counts)).toBeLessThanOrEqual(contentEventLimits.messages);
     for (const event of content) {
       expect(Buffer.byteLength(JSON.stringify(event))).toBeLessThan(JSON_BODY_LIMIT_BYTES);
+      if (event.details.kind === "session.content_added") {
+        const chars = event.details.messages.reduce((sum, message) => sum + message.text.length, 0);
+        expect(chars).toBeLessThanOrEqual(evidenceRowChars);
+      }
     }
-    const shortened = content
-      .flatMap((event) => (event.details.kind === "session.content_added" ? event.details.messages : []))
-      .find((message) => message.text.startsWith("xxx"));
-    expect(shortened?.text.length).toBe(contentEventLimits.messageChars);
-    expect(shortened?.text.endsWith("[message shortened by the local helper]")).toBe(true);
+    const pieces = storedMessages.filter((message) => message.text.startsWith("x"));
+    expect(pieces.map((message) => message.text).join("")).toBe("x".repeat(100_000));
+    expect(pieces.some((message) => message.text.includes("message shortened"))).toBe(false);
     db.close();
   });
 });

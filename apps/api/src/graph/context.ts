@@ -1,16 +1,15 @@
 import type { PoolClient } from "pg";
-import { explicitReferences, truncate, type ReferenceTarget } from "./evidence.js";
+import { explicitReferences, type ReferenceTarget } from "./evidence.js";
 import type { LockedProject } from "./graph-store.js";
 import type { WorkItemState } from "./state.js";
 
 export const contextLimits = {
-  evidencePerBatch: 12,
+  evidencePerBatch: 8,
   workItems: 30,
   lexicalMatches: 10,
   recentWorkItems: 8,
   features: 60,
   earlierExcerptsPerSession: 2,
-  earlierExcerptChars: 1500,
   scannedWorkItems: 500,
 };
 
@@ -322,7 +321,7 @@ async function earlierExcerpts(
   return result.rows.map((row) => ({
     session: sessionLabel(row.source, row.session_id),
     observedAt: row.observed_at.toISOString(),
-    excerpt: truncate(row.excerpt, contextLimits.earlierExcerptChars),
+    excerpt: row.excerpt,
     workItems: row.work_items.flatMap((id) => {
       const alias = workItemAlias.get(id);
       return alias ? [alias] : [];
