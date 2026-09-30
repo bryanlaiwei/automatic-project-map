@@ -1,14 +1,5 @@
 import { createHash } from "node:crypto";
-import type { SessionMessage } from "@apm/shared";
-
-export const excerptLimits = {
-  messageChars: 1200,
-  partChars: 5000,
-  partMessages: 16,
-  pullRequestBodyChars: 2500,
-  pullRequestCommits: 15,
-  pullRequestFiles: 30,
-} as const;
+import { evidenceRowChars, type SessionMessage } from "@apm/shared";
 
 export type SessionExcerpt = {
   records: SessionMessage[];
@@ -38,19 +29,16 @@ export function sessionExcerpts(messages: readonly SessionMessage[]): SessionExc
       continue;
     }
     // Continuation lines are indented so only a real role header starts a line; message text cannot pose as a request.
-    const body = truncate(text, excerptLimits.messageChars).replace(/\r\n|[\n\r\u2028\u2029]/g, "\n  ");
+    const body = text.replace(/\r\n|[\n\r\u2028\u2029]/g, "\n  ");
     const line = `${message.role === "user" ? "User" : "Agent"} (${message.occurredAt}): ${body}`;
-    if (
-      current &&
-      (current.lines.length >= excerptLimits.partMessages || current.chars + line.length > excerptLimits.partChars)
-    ) {
+    if (current && current.chars + 2 + line.length > evidenceRowChars) {
       parts.push({ records: current.records, excerpt: current.lines.join("\n\n"), observedAt: current.observedAt });
       current = null;
     }
     current ??= { records: [], lines: [], chars: 0, observedAt: message.occurredAt };
     current.records.push(message);
     current.lines.push(line);
-    current.chars += line.length;
+    current.chars += (current.lines.length > 1 ? 2 : 0) + line.length;
     if (Date.parse(message.occurredAt) > Date.parse(current.observedAt)) {
       current.observedAt = message.occurredAt;
     }
@@ -61,30 +49,41 @@ export function sessionExcerpts(messages: readonly SessionMessage[]): SessionExc
   return parts;
 }
 
-export function pullRequestExcerpt(input: {
+export function pullRequestExcerpts(input: {
   number: number;
   title: string;
   body: string;
   commits: ReadonlyArray<{ message: string }>;
   files: ReadonlyArray<{ filename: string }>;
-}): string {
+}): string[] {
   const lines = [`Pull request #${input.number}: ${input.title.trim()}`];
   const body = input.body.trim();
   if (body !== "") {
-    lines.push("", "Description:", truncate(body, excerptLimits.pullRequestBodyChars));
+    lines.push("", "Description:", body);
   }
   const commits = input.commits
     .map((commit) => commit.message.split("\n")[0]?.trim() ?? "")
-    .filter((message) => message !== "")
-    .slice(0, excerptLimits.pullRequestCommits);
+    .filter((message) => message !== "");
   if (commits.length > 0) {
     lines.push("", "Commits:", ...commits.map((message) => `- ${message}`));
   }
-  const files = input.files.slice(0, excerptLimits.pullRequestFiles).map((file) => file.filename);
+  const files = input.files.map((file) => file.filename);
   if (files.length > 0) {
     lines.push("", "Files:", ...files.map((filename) => `- ${filename}`));
   }
-  return lines.join("\n");
+  return splitEvidenceText(lines.join("\n"));
+}
+
+/** Splits source text into rows of at most evidenceRowChars without dropping characters. */
+export function splitEvidenceText(text: string): string[] {
+  if (text.length === 0) {
+    return [];
+  }
+  const parts: string[] = [];
+  for (let offset = 0; offset < text.length; offset += evidenceRowChars) {
+    parts.push(text.slice(offset, offset + evidenceRowChars));
+  }
+  return parts;
 }
 
 export function textFingerprint(title: string, body: string): string {
@@ -126,10 +125,6 @@ export function explicitReferences(
     }
   }
   return [...found];
-}
-
-export function truncate(text: string, max: number): string {
-  return text.length <= max ? text : `${text.slice(0, max - 1)}…`;
 }
 
 function escapeRegExp(value: string): string {

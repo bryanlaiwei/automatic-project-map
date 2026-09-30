@@ -8,7 +8,7 @@ import {
   type PullRequestState,
   type WorkflowRunState,
 } from "./artifact-state.js";
-import { pullRequestExcerpt, recordKey, sessionExcerpts, textFingerprint } from "./evidence.js";
+import { pullRequestExcerpts, recordKey, sessionExcerpts, textFingerprint } from "./evidence.js";
 import { ChangeSet, commitChanges, recomputeWorkItemStates, type LockedProject } from "./graph-store.js";
 
 export const factsBatchLimit = 200;
@@ -285,36 +285,36 @@ async function applyPullRequest(context: FactsContext, event: NormalizedEvent, d
     throw new Error("Pull request artifact upsert did not return an id.");
   }
 
-  let newEvidenceId: string | null = null;
+  const newEvidenceIds: string[] = [];
   if (existing?.text_fingerprint !== fingerprint) {
-    const inserted = await context.client.query<{ id: string }>(
-      `insert into evidence (project_id, event_id, part, kind, source, artifact_id, excerpt, observed_at)
-       values ($1, $2, 0, 'pull_request', 'github', $3, $4, $5)
-       on conflict (event_id, part) do nothing
-       returning id`,
-      [
-        context.projectId,
-        event.eventId,
-        artifactId,
-        pullRequestExcerpt({
-          number: details.number,
-          title: details.title,
-          body: details.body,
-          commits: details.commits ?? [],
-          files: details.files ?? [],
-        }),
-        details.updatedAt,
-      ],
-    );
-    newEvidenceId = inserted.rows[0]?.id ?? null;
-    context.evidenceCreated += inserted.rowCount ?? 0;
+    const excerpts = pullRequestExcerpts({
+      number: details.number,
+      title: details.title,
+      body: details.body,
+      commits: details.commits ?? [],
+      files: details.files ?? [],
+    });
+    for (const [part, excerpt] of excerpts.entries()) {
+      const inserted = await context.client.query<{ id: string }>(
+        `insert into evidence (project_id, event_id, part, kind, source, artifact_id, excerpt, observed_at)
+         values ($1, $2, $3, 'pull_request', 'github', $4, $5, $6)
+         on conflict (event_id, part) do nothing
+         returning id`,
+        [context.projectId, event.eventId, part, artifactId, excerpt, details.updatedAt],
+      );
+      const evidenceId = inserted.rows[0]?.id;
+      if (evidenceId) {
+        newEvidenceIds.push(evidenceId);
+      }
+      context.evidenceCreated += inserted.rowCount ?? 0;
+    }
   }
 
   const linked = await linkedWorkItems(context, [artifactId]);
   for (const workItemId of linked) {
     context.affected.add(workItemId);
-    if (newEvidenceId) {
-      await attachPullRequestEvidence(context, workItemId, artifactId, newEvidenceId);
+    for (const evidenceId of newEvidenceIds) {
+      await attachPullRequestEvidence(context, workItemId, artifactId, evidenceId);
     }
   }
   if (previous) {

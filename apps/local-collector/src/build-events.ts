@@ -1,17 +1,21 @@
 // Turns new session messages into session.started and session.content_added events.
-// Long messages are shortened so one upload stays under the API body limit.
+// A long message is split across rows so each stored piece stays within evidenceRowChars.
 
-import { normalizedEventSchema, SCHEMA_VERSION, sessionContentEventId, type NormalizedEvent, type SessionMessage } from "@apm/shared";
+import {
+  evidenceRowChars,
+  normalizedEventSchema,
+  SCHEMA_VERSION,
+  sessionContentEventId,
+  type NormalizedEvent,
+  type SessionMessage,
+} from "@apm/shared";
 import type { SessionAgentId } from "./contract/adapter.js";
 
 /** Keeps every content event well under the API's per-request body limit. */
 export const contentEventLimits = {
   messages: 200,
   bytes: 256 * 1024,
-  messageChars: 32 * 1024,
 };
-
-const shortenedMarker = "\n[message shortened by the local helper]";
 
 export function buildEvents(input: {
   projectId: string;
@@ -73,17 +77,26 @@ export function buildEvents(input: {
 export function contentGroups(records: readonly SessionMessage[]): SessionMessage[][] {
   const groups: SessionMessage[][] = [];
   let current: SessionMessage[] = [];
+  let chars = 0;
   let bytes = 0;
   for (const record of records) {
-    const message = shortenMessage(record);
-    const size = Buffer.byteLength(JSON.stringify(message));
-    if (current.length > 0 && (current.length >= contentEventLimits.messages || bytes + size > contentEventLimits.bytes)) {
-      groups.push(current);
-      current = [];
-      bytes = 0;
+    for (const message of splitMessage(record)) {
+      const size = Buffer.byteLength(JSON.stringify(message));
+      if (
+        current.length > 0 &&
+        (current.length >= contentEventLimits.messages ||
+          bytes + size > contentEventLimits.bytes ||
+          chars + message.text.length > evidenceRowChars)
+      ) {
+        groups.push(current);
+        current = [];
+        chars = 0;
+        bytes = 0;
+      }
+      current.push(message);
+      chars += message.text.length;
+      bytes += size;
     }
-    current.push(message);
-    bytes += size;
   }
   if (current.length > 0) {
     groups.push(current);
@@ -92,10 +105,18 @@ export function contentGroups(records: readonly SessionMessage[]): SessionMessag
 }
 
 /** Postgres cannot store NUL characters in text, so one would make the server refuse the whole upload. */
-function shortenMessage(record: SessionMessage): SessionMessage {
+function splitMessage(record: SessionMessage): SessionMessage[] {
   const text = record.text.includes("\u0000") ? record.text.replaceAll("\u0000", "") : record.text;
-  if (text.length <= contentEventLimits.messageChars) {
-    return text === record.text ? record : { ...record, text };
+  if (text.length <= evidenceRowChars) {
+    return [text === record.text ? record : { ...record, text }];
   }
-  return { ...record, text: text.slice(0, contentEventLimits.messageChars - shortenedMarker.length) + shortenedMarker };
+  const pieces: SessionMessage[] = [];
+  for (let offset = 0; offset < text.length; offset += evidenceRowChars) {
+    pieces.push({
+      ...record,
+      id: `${record.id}:${offset}`,
+      text: text.slice(offset, offset + evidenceRowChars),
+    });
+  }
+  return pieces;
 }

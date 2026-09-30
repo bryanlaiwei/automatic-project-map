@@ -59,12 +59,12 @@ describe("outbox upload", () => {
 
   it("sends a large queue in requests under the API's event and byte limits", async () => {
     const db = queueSessions(tempRoot(), 80);
-    expect(db.pendingEvents()).toHaveLength(160);
+    expect(db.pendingEvents()).toHaveLength(240);
     const requests: NormalizedEvent[][] = [];
 
     const result = await flushOutbox(db, acceptingTransport(requests));
 
-    expect(result.acknowledged).toHaveLength(160);
+    expect(result.acknowledged).toHaveLength(240);
     expect(result.error).toBeNull();
     expect(requests.length).toBeGreaterThan(1);
     for (const events of requests) {
@@ -88,7 +88,7 @@ describe("outbox upload", () => {
       },
     });
     expect(partial.acknowledged.length).toBeGreaterThan(0);
-    expect(partial.failed).toBe(160 - partial.acknowledged.length);
+    expect(partial.failed).toBe(240 - partial.acknowledged.length);
     expect(partial.unauthorized).toBe(false);
     expect(db.pendingEvents()).toHaveLength(partial.failed);
 
