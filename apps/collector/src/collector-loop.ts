@@ -2,9 +2,8 @@
 // It skips the scan when no folders are selected and waits longer after an upload failure.
 
 import { homedir } from "node:os";
-import { join } from "node:path";
+import { agents } from "./agents.js";
 import { ChangeTracker } from "./change-tracker.js";
-import type { SessionAgentId } from "./contract/adapter.js";
 import { runCollectionPass, type LogRoots } from "./collection-pass.js";
 import { createFetchEventTransport, flushOutbox, type EventUploadTransport } from "./upload-outbox.js";
 import type { LocalDb, PairingRecord } from "./local-db.js";
@@ -27,22 +26,20 @@ export type CollectorStatus = {
 };
 
 export function defaultLogRoots(env: NodeJS.ProcessEnv, home: string = homedir()): LogRoots {
-  const roots: LogRoots = {
-    codex: env.APM_CODEX_SESSIONS?.trim() || join(home, ".codex", "sessions"),
-    claude_code: env.APM_CLAUDE_PROJECTS?.trim() || join(home, ".claude", "projects"),
-  };
-  const cursor = env.APM_CURSOR_SESSIONS?.trim();
-  if (cursor) {
-    roots.cursor = cursor;
+  const roots: LogRoots = {};
+  for (const agent of agents) {
+    const directory = agent.logDirectory(env, home);
+    if (directory) {
+      roots[agent.id] = directory;
+    }
   }
   return roots;
 }
 
 export function describeLogRoots(roots: LogRoots): string[] {
-  const agents: SessionAgentId[] = ["codex", "claude_code", "cursor"];
   return agents.flatMap((agent) => {
-    const root = roots[agent];
-    return root ? [`${agent}: ${root}`] : [];
+    const root = roots[agent.id];
+    return root ? [`${agent.id}: ${root}`] : [];
   });
 }
 

@@ -1,11 +1,10 @@
 // Reads a Cursor session directory (session.json plus transcript.jsonl) and turns it into messages.
-// The adapter object is the contract the scan can call; parseCursorText stays the function the scan calls today.
 
 import { readFileSync } from "node:fs";
 import { basename, join } from "node:path";
-import type { AgentAdapter } from "../contract/adapter.js";
+import type { AgentAdapter, SessionLocator } from "../contract/adapter.js";
 import type { ParsedSession, SessionRecord } from "../contract/session.js";
-import { sessionLocators } from "../find-sessions.js";
+import { isFile, walkDirectories } from "../log-walk.js";
 import { textFromContent } from "../message-text.js";
 import { parseJsonLines } from "./codex.js";
 
@@ -62,17 +61,52 @@ export function parseCursorText(metaText: string, transcript: string): ParsedSes
   };
 }
 
+function cursorLocators(root: string): SessionLocator[] {
+  const found: SessionLocator[] = [];
+  for (const directory of walkDirectories(root)) {
+    const sessionPath = join(directory, "session.json");
+    const transcriptPath = join(directory, "transcript.jsonl");
+    if (!isFile(sessionPath) || !isFile(transcriptPath)) {
+      continue;
+    }
+    found.push({
+      key: directory,
+      files: [sessionPath, transcriptPath],
+      logFile: transcriptPath,
+    });
+  }
+  return found;
+}
+
+function emptyCursorSession(): ParsedSession {
+  return {
+    sessionId: null,
+    createdAt: null,
+    workingFolder: null,
+    sourceVersion: null,
+    records: [],
+    ambiguousFolder: false,
+  };
+}
+
 export const cursorAdapter: AgentAdapter = {
   id: "cursor",
   logDirectory(env, _home) {
     return env.APM_CURSOR_SESSIONS?.trim() || undefined;
   },
   discover(root) {
-    return sessionLocators("cursor", root);
+    return cursorLocators(root);
   },
   read(locator, logBytes) {
     const sessionFile = locator.files.find((file) => basename(file) === "session.json");
     const metaText = sessionFile === undefined ? "" : readFileSync(sessionFile, "utf8");
-    return parseCursorText(metaText, logBytes.toString("utf8"));
+    try {
+      return parseCursorText(metaText, logBytes.toString("utf8"));
+    } catch {
+      return emptyCursorSession();
+    }
+  },
+  readPath(filePath) {
+    return parseCursorSession(filePath);
   },
 };

@@ -2,6 +2,7 @@
 // A checkpoint advances only together with the events queued for that session.
 
 import { evaluateSessionEligibility } from "@apm/shared";
+import { agents } from "./agents.js";
 import { buildEvents } from "./build-events.js";
 import type { ChangeTracker } from "./change-tracker.js";
 import type { SessionAgentId } from "./contract/adapter.js";
@@ -140,7 +141,7 @@ function checkpointFrom(
     createdAt,
     projectId: input.projectId,
     projectCutoff: input.trackingStartedAt,
-    sourceLocator: source.locator,
+    sourceLocator: source.locator.key,
     workingFolder: source.parsed.workingFolder ?? "",
     selectionId: selection?.id ?? matchedRoot,
     sourceGeneration: source.generation,
@@ -152,22 +153,21 @@ function checkpointFrom(
 
 function prepareIncremental(input: CollectPassInput): CollectPassResult {
   const result: CollectPassResult = { queuedEventIds: [], excluded: [], paused: [], skipped: [], failed: [] };
-  const agents: SessionAgentId[] = ["codex", "cursor", "claude_code"];
-  for (const agent of agents) {
-    const root = input.logRoots[agent];
+  for (const adapter of agents) {
+    const root = input.logRoots[adapter.id];
     if (!root) {
       continue;
     }
-    const found = discoverSessions(agent, root, input.changes);
+    const found = discoverSessions(adapter, root, input.changes);
     for (const source of found) {
       try {
         const sessionId = source.parsed.sessionId;
-        const existing = sessionId ? input.db.checkpoint(agent, sessionId, input.projectId) : null;
-        const sliced = sliceNewRecords(source, existing?.nextCursor ?? "");
+        const existing = sessionId ? input.db.checkpoint(adapter.id, sessionId, input.projectId) : null;
+        const sliced = sliceNewRecords(adapter, source, existing?.nextCursor ?? "");
         collectOne(input, sliced, result);
       } catch (error) {
         // Leave the file unremembered so the next scan tries it again; other sessions carry on.
-        result.failed.push(`${agent}:${source.sessionKey}: ${error instanceof Error ? error.message : "unknown error"}`);
+        result.failed.push(`${adapter.id}:${source.sessionKey}: ${error instanceof Error ? error.message : "unknown error"}`);
         continue;
       }
       if (source.change) {
