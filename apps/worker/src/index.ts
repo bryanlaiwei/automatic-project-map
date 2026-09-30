@@ -1,6 +1,6 @@
 import { getPool } from "@apm/api/db";
 import { loadEnvFile } from "@apm/api/env";
-import { createGithubEnricher } from "@apm/api/github-enrich";
+import { createGithubEnricher } from "@apm/github-collector/enrich";
 import { openAiInterpreterFromEnv } from "@apm/api/graph/openai-interpreter";
 import { backgroundJobs, startWorker } from "./worker.js";
 

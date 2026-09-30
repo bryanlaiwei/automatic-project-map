@@ -10,13 +10,11 @@ import {
   saveWorkflowObservation,
   type PullRequestSnapshot,
   type WorkflowSnapshot,
-} from "./github-enrich.js";
-import { normalizeGithubDelivery } from "./github.js";
+  type GithubLookup,
+} from "@apm/github-collector/enrich";
+import { normalizeGithubDelivery } from "@apm/github-collector/webhook";
 
-export type GithubLookup = {
-  enrichPullRequest(owner: string, name: string, number: number): Promise<PullRequestSnapshot | null>;
-  enrichWorkflowRun(owner: string, name: string, runId: number): Promise<WorkflowSnapshot | null>;
-};
+export type { GithubLookup };
 
 export type ProjectRow = {
   id: string;

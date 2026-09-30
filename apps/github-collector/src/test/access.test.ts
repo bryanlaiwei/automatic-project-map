@@ -1,6 +1,6 @@
 import { generateKeyPairSync } from "node:crypto";
 import { describe, expect, it } from "vitest";
-import { createGithubAccountLookup, createGithubRepositoryAccessCheck } from "./github-app.js";
+import { createGithubAccountLookup, createGithubRepositoryAccessCheck } from "../access.js";
 
 const { privateKey } = generateKeyPairSync("rsa", {
   modulusLength: 2048,

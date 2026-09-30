@@ -1,16 +1,16 @@
 import { createHmac } from "node:crypto";
 import type { Server } from "node:http";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
-import type { RepositoryAccess } from "./github-app.js";
-import { snapshotFromPullRequest, snapshotFromWorkflow } from "./github-enrich.js";
+import type { RepositoryAccess } from "@apm/github-collector/access";
+import { snapshotFromPullRequest, snapshotFromWorkflow } from "@apm/github-collector/enrich";
 import { loadEnvFile } from "./env.js";
 
 loadEnvFile();
 
 const { createApp } = await import("./app.js");
 const { getPool } = await import("./db.js");
-const { refreshObservedGithub } = await import("./github-refresh.js");
-const { deliveryAttemptLimit, processQueuedDeliveries } = await import("./store.js");
+const { refreshObservedGithub } = await import("@apm/github-collector/refresh");
+const { deliveryAttemptLimit, insertEvents, processQueuedDeliveries } = await import("./store.js");
 
 const userId = "77777777-7777-4777-8777-777777777777";
 const secret = "test-webhook-secret";
@@ -116,7 +116,7 @@ describe("background GitHub work", () => {
     expect((await postWebhook("pull_request", "bg-pr-opened", { repository: { id: repoId }, pull_request: opened })).status).toBe(202);
 
     pulls.set(11, pullRequest({ id: 3101, number: 11, state: "closed", merged: true, updatedAt: "2026-09-25T11:00:00.000Z" }));
-    const first = await refreshObservedGithub(pool, github, { projectId });
+    const first = await refreshObservedGithub(pool, github, { projectId, writeEvents: (events) => insertEvents(pool, events) });
     expect(first.eventsStored).toBeGreaterThanOrEqual(1);
 
     const stored = await pool.query<{ details: { merged: boolean; state: string } }>(
@@ -131,7 +131,7 @@ describe("background GitHub work", () => {
     expect(observation.rows[0]?.merged).toBe(true);
     expect(observation.rows[0]?.refreshed_at).not.toBeNull();
 
-    const second = await refreshObservedGithub(pool, github, { projectId });
+    const second = await refreshObservedGithub(pool, github, { projectId, writeEvents: (events) => insertEvents(pool, events) });
     const again = await pool.query(
       "select 1 from normalized_events where project_id = $1 and event_id like 'github:refresh:pull_request:3101:%'",
       [projectId],
@@ -159,7 +159,7 @@ describe("background GitHub work", () => {
       run: { ...started, status: "completed", conclusion: "failure", updated_at: finishedAt },
       jobs: { jobs: [{ id: 9, name: "test", status: "completed", conclusion: "failure", run_attempt: 1 }] },
     });
-    await refreshObservedGithub(pool, github, { projectId });
+    await refreshObservedGithub(pool, github, { projectId, writeEvents: (events) => insertEvents(pool, events) });
 
     const stored = await pool.query<{ details: { status: string; conclusion: string; jobs: unknown[] } }>(
       "select details from normalized_events where event_id = $1",

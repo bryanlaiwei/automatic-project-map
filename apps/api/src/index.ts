@@ -1,5 +1,5 @@
 import { loadEnvFile } from "./env.js";
-import { readWebhookSecret } from "./github.js";
+import { readWebhookSecret } from "@apm/github-collector/webhook";
 
 loadEnvFile();
 
@@ -14,8 +14,8 @@ try {
 const { createApp } = await import("./app.js");
 const { verifySupabaseUser } = await import("./auth.js");
 const { getPool } = await import("./db.js");
-const { createGithubAccountLookup, createGithubRepositoryAccessCheck } = await import("./github-app.js");
-const { createGithubEnricher } = await import("./github-enrich.js");
+const { createGithubAccountLookup, createGithubRepositoryAccessCheck } = await import("@apm/github-collector/access");
+const { createGithubEnricher } = await import("@apm/github-collector/enrich");
 
 const githubApp = {
   appId: process.env.GITHUB_APP_ID ?? "",

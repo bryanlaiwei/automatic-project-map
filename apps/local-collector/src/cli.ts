@@ -10,7 +10,7 @@ import { collectSession } from "./parse-file.js";
 const agents: readonly SessionAgentId[] = ["codex", "cursor", "claude_code"];
 
 const parseUsage =
-  "usage: npm start -w @apm/collector -- <file> <trackingStartedAt> <codex|cursor|claude_code> <root...>";
+  "usage: npm start -w @apm/local-collector -- <file> <trackingStartedAt> <codex|cursor|claude_code> <root...>";
 
 export type CliIo = {
   log: (line: string) => void;
