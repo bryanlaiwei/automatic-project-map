@@ -273,21 +273,62 @@ export const api = {
     request<{ code: string; expiresAt: string }>(`/projects/${projectId}/collector/pairing-codes`, token, { method: "POST" }),
 };
 
-/** Hands a fresh pairing code to the helper running on this computer. */
-export async function pairLocalHelper(code: string): Promise<void> {
-  const response = await fetch(`${helperUrl}/pair`, {
-    method: "POST",
-    headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ code, apiUrl }),
+export type HelperFolder = { id: string; canonicalPath: string; enabled: boolean };
+export type HelperLogRoot = { id: string; path: string };
+export type HelperOverview = {
+  pairing: { projectId: string; trackingStartedAt: string; apiUrl: string } | null;
+  folders: HelperFolder[];
+  logRoots: HelperLogRoot[];
+  status: (HelperStatus & {
+    uploaded: number;
+    dropped: number;
+    paused: Array<{ provider: string; sessionId: string; reason: string | null }>;
+    nextUploadAt: string | null;
+  }) | null;
+};
+
+async function helperRequest(path: string, init: RequestInit | undefined, fallback: string): Promise<Response> {
+  const response = await fetch(`${helperUrl}${path}`, {
+    ...init,
+    headers: { "Content-Type": "application/json", ...init?.headers },
   });
-  if (!response.ok) {
+  if (!response.ok && response.status !== 204) {
     const body: unknown = await response.json().catch(() => null);
     const message =
-      typeof body === "object" && body !== null && "error" in body && typeof body.error === "string"
-        ? body.error
-        : `The local helper refused the pairing (${response.status}).`;
+      typeof body === "object" && body !== null && "error" in body && typeof body.error === "string" ? body.error : fallback;
     throw new Error(message);
   }
+  return response;
+}
+
+/** Hands a fresh pairing code to the helper running on this computer. */
+export async function pairLocalHelper(code: string, api = apiUrl): Promise<void> {
+  await helperRequest("/pair", { method: "POST", body: JSON.stringify({ code, apiUrl: api }) }, "The local helper refused the pairing.");
+}
+
+/** Everything the helper page shows, or null when the helper is not running. */
+export async function readHelperOverview(): Promise<HelperOverview | null> {
+  try {
+    const response = await fetch(`${helperUrl}/`);
+    if (!response.ok) {
+      return null;
+    }
+    return (await response.json()) as HelperOverview;
+  } catch {
+    return null;
+  }
+}
+
+export async function addHelperFolder(path: string): Promise<void> {
+  await helperRequest("/folders", { method: "POST", body: JSON.stringify({ path }) }, "Could not add that folder.");
+}
+
+export async function removeHelperFolder(id: string): Promise<void> {
+  await helperRequest(`/folders/${encodeURIComponent(id)}/disable`, { method: "POST", body: "{}" }, "Could not remove that folder.");
+}
+
+export async function scanHelper(): Promise<void> {
+  await helperRequest("/scan", { method: "POST", body: "{}" }, "Scan failed.");
 }
 
 /** Status of the helper on this computer, or null when it is not running. */

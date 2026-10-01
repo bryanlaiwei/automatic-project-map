@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useState } from "react";
 import { ApiError, api, errorMessage, type Me, type Project } from "./api";
+import { HelperPage } from "./components/HelperPage";
 import { Onboarding } from "./components/Onboarding";
 import { SignIn } from "./components/SignIn";
 import { ToastProvider } from "./components/toast";
@@ -82,6 +83,9 @@ function AppContent() {
     await supabase?.auth.signOut();
   }
 
+  if (window.location.pathname === "/helper") {
+    return <HelperPage />;
+  }
   if (!ready) {
     return (
       <div className="flex h-full items-center justify-center">

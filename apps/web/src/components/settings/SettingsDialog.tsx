@@ -1,6 +1,6 @@
-import { Activity, ChevronDown, Copy, ExternalLink, KeyRound, Laptop, Settings2, Trash2, UserPlus, Users, X } from "lucide-react";
+import { Activity, ChevronDown, Copy, KeyRound, Laptop, Settings2, Trash2, UserPlus, Users, X } from "lucide-react";
 import { useCallback, useEffect, useState, type FormEvent, type ReactNode } from "react";
-import { api, errorMessage, helperUrl, pairLocalHelper, readHelperStatus, type HelperStatus, type ModelProviderId, type ModelSetup, type ProjectSettings, type SupplierModel } from "../../api";
+import { api, errorMessage, pairLocalHelper, readHelperStatus, type HelperStatus, type ModelProviderId, type ModelSetup, type ProjectSettings, type SupplierModel } from "../../api";
 import { formatDateTime, timeAgo } from "../../format";
 import { ConfirmDialog } from "../corrections/Dialogs";
 import { GithubMark } from "../GithubMark";
@@ -398,18 +398,16 @@ function HelperTab({ token, settings, reload }: { token: string; settings: Proje
                 {running && status.paired ? "Reconnect" : "Connect this computer"}
               </Button>
               <a
-                href={helperUrl}
-                target="_blank"
-                rel="noreferrer"
+                href="/helper"
                 className="inline-flex h-8 items-center gap-1.5 rounded-lg px-2.5 text-[13px] font-medium text-zinc-600 hover:bg-zinc-100 hover:text-zinc-900"
               >
-                Choose folders <ExternalLink className="size-3.5" />
+                Choose folders
               </a>
             </div>
             {error ? <p className="mt-3 text-sm text-rose-600">{error}</p> : null}
             {fallbackCode ? (
               <div className="mt-3 rounded-lg bg-zinc-50 p-3 text-sm text-zinc-600">
-                If the helper runs somewhere this page cannot reach, paste this code on its page:
+                If the helper runs on another computer, open the helper page there and paste this code:
                 <div className="mt-2 flex items-center gap-2">
                   <code className="min-w-0 flex-1 truncate rounded-md bg-white px-2 py-1 font-mono text-xs ring-1 ring-zinc-200">{fallbackCode}</code>
                   <IconButton label="Copy code" onClick={() => void navigator.clipboard.writeText(fallbackCode).then(() => toast("Code copied"))}>
