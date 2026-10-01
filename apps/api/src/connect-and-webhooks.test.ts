@@ -29,7 +29,7 @@ function sign(body: string): string {
   return `sha256=${createHmac("sha256", secret).update(body).digest("hex")}`;
 }
 
-describe("day 1 intake", () => {
+describe("repository connection and webhooks", () => {
   const pool = getPool();
   let baseUrl = "";
   let access: RepositoryAccess = { status: "accessible" };

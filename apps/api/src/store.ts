@@ -114,17 +114,6 @@ export async function findProjectByRepo(pool: Pool, repoId: number): Promise<Pro
   return result.rows[0] ?? null;
 }
 
-export async function getProjectForUser(pool: Pool, userId: string, projectId: string): Promise<ProjectRow | null> {
-  const result = await pool.query<ProjectRow>(
-    `select p.*
-     from projects p
-     join memberships m on m.workspace_id = p.workspace_id
-     where p.id = $1 and m.user_id = $2`,
-    [projectId, userId],
-  );
-  return result.rows[0] ?? null;
-}
-
 export async function userCanAccessProject(pool: Pool, userId: string, projectId: string): Promise<boolean> {
   const result = await pool.query(
     `select 1

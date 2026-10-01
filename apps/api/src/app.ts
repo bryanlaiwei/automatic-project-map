@@ -5,7 +5,7 @@ import { JSON_BODY_LIMIT_BYTES, SCHEMA_VERSION } from "@apm/shared";
 import type { AuthUser } from "./auth.js";
 import type { GithubAccountLookup, RepositoryAccessCheck } from "@apm/github-collector/access";
 import { verifyGithubSignature } from "@apm/github-collector/webhook";
-import { createPairingCode, exchangePairingCode, findCollectorDevice, revokeCollectorToken } from "./collector-tokens.js";
+import { createPairingCode, exchangePairingCode, findHelperDevice, revokeHelperToken } from "./helper-tokens.js";
 import { graphRouter } from "./graph/routes.js";
 import { workspaceRouter } from "./workspace-routes.js";
 import { listProjectRoles, projectRole, type Role } from "./workspace.js";
@@ -268,7 +268,7 @@ export function createApp(deps: AppDeps) {
     }),
   );
 
-  app.post("/projects/:projectId/collector/pairing-codes", async (req, res) => {
+  app.post("/projects/:projectId/helper/pairing-codes", async (req, res) => {
     const user = await requireUser(deps, req, res);
     if (!user) {
       return;
@@ -282,7 +282,7 @@ export function createApp(deps: AppDeps) {
     res.status(201).json(pairing);
   });
 
-  app.post("/collector/pair", async (req, res) => {
+  app.post("/helper/pair", async (req, res) => {
     const parsed = pairBody.safeParse(req.body);
     if (!parsed.success) {
       res.status(400).json({ error: "A pairing code is required." });
@@ -304,13 +304,13 @@ export function createApp(deps: AppDeps) {
     });
   });
 
-  app.delete("/collector/token", async (req, res) => {
-    const device = await findCollectorDevice(deps.pool, bearerToken(req));
+  app.delete("/helper/token", async (req, res) => {
+    const device = await findHelperDevice(deps.pool, bearerToken(req));
     if (!device) {
-      res.status(401).json({ error: "Collector token is missing or revoked." });
+      res.status(401).json({ error: "Helper token is missing or revoked." });
       return;
     }
-    await revokeCollectorToken(deps.pool, bearerToken(req));
+    await revokeHelperToken(deps.pool, bearerToken(req));
     res.status(204).end();
   });
 
@@ -322,7 +322,7 @@ export function createApp(deps: AppDeps) {
     }
     const allowed = await canIngest(deps, req, parsed.data.projectId);
     if (allowed === "unauthorized") {
-      res.status(401).json({ error: "Sign in or a collector token is required." });
+      res.status(401).json({ error: "Sign in or a helper token is required." });
       return;
     }
     if (allowed === "forbidden") {
@@ -345,7 +345,7 @@ async function canIngest(
   if (token === "") {
     return "unauthorized";
   }
-  const device = await findCollectorDevice(deps.pool, token);
+  const device = await findHelperDevice(deps.pool, token);
   if (device) {
     return device.projectId === projectId ? "ok" : "forbidden";
   }

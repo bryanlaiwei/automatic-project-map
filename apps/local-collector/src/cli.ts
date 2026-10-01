@@ -21,8 +21,8 @@ export type CliResult = { exitCode: number };
 
 export async function runCli(argv: string[], env: NodeJS.ProcessEnv, io: CliIo): Promise<CliResult> {
   if (argv[0] === "serve") {
-    const port = Number(env.APM_COLLECTOR_PORT ?? 47321);
-    const dbPath = env.APM_COLLECTOR_DB ?? "collector.sqlite";
+    const port = Number(env.APM_HELPER_PORT ?? env.APM_COLLECTOR_PORT ?? 47321);
+    const dbPath = env.APM_HELPER_DB ?? env.APM_COLLECTOR_DB ?? "collector.sqlite";
     const db = new LocalDb(dbPath);
     const logRoots = defaultLogRoots(env);
     const loop = new CollectorLoop({
@@ -52,7 +52,7 @@ export async function runCli(argv: string[], env: NodeJS.ProcessEnv, io: CliIo):
 function runParse(argv: string[], io: CliIo): CliResult {
   const [filePath, trackingStartedAt, agent, ...selectedRoots] = argv;
   if (!filePath || !trackingStartedAt || !isAgent(agent)) {
-    io.log("collector ready");
+    io.log("helper ready");
     io.log(parseUsage);
     return { exitCode: 0 };
   }

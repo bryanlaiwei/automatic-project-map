@@ -15,7 +15,7 @@ flowchart TD
 
   fiveSec --> job["Queue one job per project, up to 3 at once"]
   job --> facts["Facts: write pull requests, reviews, workflow runs, and evidence"]
-  facts --> model{"OpenAI key set?"}
+  facts --> model{"Saved OpenAI, Anthropic, or Gemini key, or OPENAI_API_KEY?"}
   model -->|yes| interpret["Model reads up to 8 unread evidence rows and saves accepted map operations"]
   model -->|no| wait["Evidence stays unread"]
   events --> fiveSec

@@ -1,7 +1,8 @@
 import type { Pool } from "pg";
 import type { Interpreter } from "./graph/process.js";
 import { createModelInterpreter } from "./graph/model-interpreter.js";
-import { graphPromptVersion, openAiInterpreterFromEnv } from "./graph/openai-interpreter.js";
+import { graphPromptVersion } from "./graph/graph-prompt.js";
+import { openAiInterpreterFromEnv } from "./graph/openai-interpreter.js";
 import { isModelProviderId, modelProvider, type ModelProviderId } from "./model-providers.js";
 import { ciphertextBuffer, ModelSecretsError, openModelKey, sealModelKey } from "./secret-box.js";
 

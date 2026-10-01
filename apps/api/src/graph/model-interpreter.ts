@@ -1,6 +1,7 @@
 import { z } from "zod";
 import { renderContext, type InterpretationContext } from "./context.js";
-import { createOpenAiInterpreter, graphInstructions, graphPromptVersion } from "./openai-interpreter.js";
+import { graphInstructions, graphPromptVersion } from "./graph-prompt.js";
+import { createOpenAiInterpreter } from "./openai-interpreter.js";
 import type { Interpreter } from "./process.js";
 import { proposalSchema, type Proposal } from "./proposal.js";
 import { modelProvider, type ModelProviderId } from "../model-providers.js";

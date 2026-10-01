@@ -1,4 +1,4 @@
-// Starts the collector from the command line.
+// Starts the local helper from the command line.
 // A successful serve command stays running; every other result exits with its status code.
 
 import { runCli } from "./cli.js";

@@ -63,7 +63,7 @@ export async function startLocalServer(options: LocalServerOptions): Promise<Ser
           send(res, 400, { error: "A pairing code is required." }, req, webOrigin);
           return;
         }
-        const response = await fetchImpl(`${apiUrl.replace(/\/$/, "")}/collector/pair`, {
+        const response = await fetchImpl(`${apiUrl.replace(/\/$/, "")}/helper/pair`, {
           method: "POST",
           headers: { "Content-Type": "application/json" },
           body: JSON.stringify({ code }),

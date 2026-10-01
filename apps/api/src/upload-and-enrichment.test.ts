@@ -20,7 +20,7 @@ function sign(body: string): string {
   return `sha256=${createHmac("sha256", secret).update(body).digest("hex")}`;
 }
 
-describe("day 2 collection", () => {
+describe("session upload and GitHub enrichment", () => {
   const pool = getPool();
   let baseUrl = "";
   let projectId = "";
@@ -74,21 +74,21 @@ describe("day 2 collection", () => {
     });
   });
 
-  it("acks a collector batch once and rejects a pre-project session", async () => {
-    const codeResponse = await fetch(`${baseUrl}/projects/${projectId}/collector/pairing-codes`, {
+  it("acks a helper batch once and rejects a pre-project session", async () => {
+    const codeResponse = await fetch(`${baseUrl}/projects/${projectId}/helper/pairing-codes`, {
       method: "POST",
       headers: { Authorization: "Bearer day2-user" },
     });
     expect(codeResponse.status).toBe(201);
     const codeBody = (await codeResponse.json()) as { code: string };
-    const paired = await fetch(`${baseUrl}/collector/pair`, {
+    const paired = await fetch(`${baseUrl}/helper/pair`, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ code: codeBody.code }),
     });
     expect(paired.status).toBe(201);
     const device = (await paired.json()) as { token: string };
-    const reused = await fetch(`${baseUrl}/collector/pair`, {
+    const reused = await fetch(`${baseUrl}/helper/pair`, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ code: codeBody.code }),
@@ -121,7 +121,7 @@ describe("day 2 collection", () => {
     const stored = await pool.query("select event_id from normalized_events where event_id = $1", ["codex:day2-session:started"]);
     expect(stored.rowCount).toBe(1);
 
-    const revoked = await fetch(`${baseUrl}/collector/token`, {
+    const revoked = await fetch(`${baseUrl}/helper/token`, {
       method: "DELETE",
       headers: { Authorization: `Bearer ${device.token}` },
     });

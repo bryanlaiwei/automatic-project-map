@@ -1,7 +1,7 @@
 import { describe, expect, it } from "vitest";
 import type { InterpretationContext } from "./context.js";
 import { createModelInterpreter } from "./model-interpreter.js";
-import { graphPromptVersion } from "./openai-interpreter.js";
+import { graphPromptVersion } from "./graph-prompt.js";
 import { checkModelKey, listSupplierModels } from "../model-providers.js";
 
 const context: InterpretationContext = {
