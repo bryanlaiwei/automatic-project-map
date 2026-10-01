@@ -1,19 +1,20 @@
-import { Activity, Copy, ExternalLink, Laptop, Settings2, Trash2, UserPlus, Users, X } from "lucide-react";
+import { Activity, ChevronDown, Copy, ExternalLink, KeyRound, Laptop, Settings2, Trash2, UserPlus, Users, X } from "lucide-react";
 import { useCallback, useEffect, useState, type FormEvent, type ReactNode } from "react";
-import { api, errorMessage, helperUrl, pairLocalHelper, readHelperStatus, type HelperStatus, type ProjectSettings } from "../../api";
+import { api, errorMessage, helperUrl, pairLocalHelper, readHelperStatus, type HelperStatus, type ModelProviderId, type ModelSetup, type ProjectSettings, type SupplierModel } from "../../api";
 import { formatDateTime, timeAgo } from "../../format";
 import { ConfirmDialog } from "../corrections/Dialogs";
 import { GithubMark } from "../GithubMark";
 import { useToast } from "../toast-context";
 import { cx, useNow } from "../helpers";
-import { Avatar, Button, ErrorNote, IconButton, Spinner, TimeAgo, inputClass } from "../ui";
+import { Avatar, Button, ErrorNote, Field, IconButton, Spinner, TimeAgo, inputClass } from "../ui";
 
-export type SettingsTab = "general" | "members" | "helper" | "health";
+export type SettingsTab = "general" | "members" | "helper" | "model" | "health";
 
 const tabs: Array<{ id: SettingsTab; label: string; icon: ReactNode }> = [
   { id: "general", label: "General", icon: <Settings2 className="size-4" /> },
   { id: "members", label: "Members", icon: <Users className="size-4" /> },
   { id: "helper", label: "Local helper", icon: <Laptop className="size-4" /> },
+  { id: "model", label: "Model", icon: <KeyRound className="size-4" /> },
   { id: "health", label: "Health", icon: <Activity className="size-4" /> },
 ];
 
@@ -106,6 +107,7 @@ export function SettingsDialog({
                 {tab === "general" ? <GeneralTab token={token} settings={settings} onDeleted={onProjectDeleted} /> : null}
                 {tab === "members" ? <MembersTab token={token} settings={settings} reload={reload} onLeft={onLeft} /> : null}
                 {tab === "helper" ? <HelperTab token={token} settings={settings} reload={reload} /> : null}
+                {tab === "model" ? <ModelTab token={token} reload={reload} /> : null}
                 {tab === "health" ? <HealthTab settings={settings} /> : null}
               </>
             ) : null}
@@ -482,6 +484,38 @@ function HealthItem({ tone, title, children }: { tone: "good" | "warn" | "bad" |
   );
 }
 
+function providerLabel(provider: "openai" | "anthropic" | "gemini" | null): string {
+  switch (provider) {
+    case "openai":
+      return "OpenAI";
+    case "anthropic":
+      return "Anthropic";
+    case "gemini":
+      return "Gemini";
+    case null:
+      return "saved";
+    default: {
+      const unhandled: never = provider;
+      return unhandled;
+    }
+  }
+}
+
+function modelSourceLine(model: ProjectSettings["health"]["analysis"]["model"]): string {
+  switch (model.source) {
+    case "owner":
+      return `Using an owner's ${providerLabel(model.provider)} key.`;
+    case "server":
+      return "Using the server OpenAI key. An owner can replace it from the Model tab.";
+    case "none":
+      return "No model key yet. An owner can add one in the Model tab.";
+    default: {
+      const unhandled: never = model.source;
+      return unhandled;
+    }
+  }
+}
+
 function HealthTab({ settings }: { settings: ProjectSettings }) {
   const now = useNow(10_000);
   const { github, local, analysis } = settings.health;
@@ -501,12 +535,17 @@ function HealthTab({ settings }: { settings: ProjectSettings }) {
         {analysis.waiting > 0 ? (
           <p>
             {analysis.waiting} update{analysis.waiting === 1 ? "" : "s"} waiting since {timeAgo(analysis.waitingSince, now)}.
-            {waitingMinutes > 5 ? " The worker may not be running, or OPENAI_API_KEY may be missing." : ""}
+            {waitingMinutes > 5
+              ? analysis.model.source === "none"
+                ? " Add a model key in the Model tab, and make sure the worker is running."
+                : " The worker may not be running."
+              : ""}
           </p>
         ) : (
           <p>Nothing is waiting.</p>
         )}
         <p>{analysis.lastAnalyzedAt ? `Last analyzed ${timeAgo(analysis.lastAnalyzedAt, now)}.` : "Nothing has been analyzed yet."}</p>
+        <p>{modelSourceLine(analysis.model)}</p>
         {analysis.lastFailure ? (
           <p className="text-amber-700">
             Last attempt failed {timeAgo(analysis.lastFailure.at, now)}: {analysis.lastFailure.error}
@@ -514,6 +553,256 @@ function HealthTab({ settings }: { settings: ProjectSettings }) {
         ) : null}
         {analysis.gaveUp > 0 ? <p className="text-amber-700">{analysis.gaveUp} updates could not be analyzed after several attempts.</p> : null}
       </HealthItem>
+    </div>
+  );
+}
+
+function ModelTab({ token, reload }: { token: string; reload: () => Promise<void> }) {
+  const toast = useToast();
+  const [setup, setSetup] = useState<ModelSetup | null>(null);
+  const [provider, setProvider] = useState<ModelProviderId>("openai");
+  const [model, setModel] = useState("");
+  const [models, setModels] = useState<SupplierModel[]>([]);
+  const [modelsLoading, setModelsLoading] = useState(false);
+  const [modelsError, setModelsError] = useState<string | null>(null);
+  const [apiKey, setApiKey] = useState("");
+  const [showKey, setShowKey] = useState(false);
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+
+  useEffect(() => {
+    let cancelled = false;
+    api
+      .modelSetup(token)
+      .then((value) => {
+        if (cancelled) {
+          return;
+        }
+        setSetup(value);
+        setProvider(value.credential?.provider ?? "openai");
+        setModel(value.credential?.model ?? "");
+      })
+      .catch((reason: unknown) => {
+        if (!cancelled) {
+          setError(errorMessage(reason, "Could not load the model key."));
+        }
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [token]);
+
+  useEffect(() => {
+    if (!setup) {
+      return;
+    }
+    const typed = apiKey.trim();
+    const useSaved = typed === "" && setup.credential?.provider === provider;
+    if (typed.length < 12 && !useSaved) {
+      setModels([]);
+      setModelsLoading(false);
+      setModelsError(null);
+      return;
+    }
+    let cancelled = false;
+    setModelsLoading(true);
+    const handle = window.setTimeout(() => {
+      void api
+        .supplierModels(token, { provider, apiKey: typed })
+        .then((value) => {
+          if (cancelled) {
+            return;
+          }
+          const saved = setup.credential?.provider === provider ? setup.credential.model : null;
+          const next = saved && !value.models.some((item) => item.id === saved) ? [{ id: saved, label: saved }, ...value.models] : value.models;
+          setModels(next);
+          setModel((current) => {
+            if (next.some((item) => item.id === current)) {
+              return current;
+            }
+            if (saved && next.some((item) => item.id === saved)) {
+              return saved;
+            }
+            const preferred = setup.providers.find((entry) => entry.id === provider)?.defaultModel;
+            if (preferred && next.some((item) => item.id === preferred)) {
+              return preferred;
+            }
+            return next[0]?.id ?? "";
+          });
+          setModelsError(null);
+        })
+        .catch((reason: unknown) => {
+          if (cancelled) {
+            return;
+          }
+          setModels([]);
+          setModelsError(errorMessage(reason, "Could not load models."));
+        })
+        .finally(() => {
+          if (!cancelled) {
+            setModelsLoading(false);
+          }
+        });
+    }, typed === "" ? 0 : 400);
+    return () => {
+      cancelled = true;
+      window.clearTimeout(handle);
+    };
+  }, [apiKey, provider, setup, token]);
+
+  const selected = setup?.providers.find((entry) => entry.id === provider);
+
+  async function save(event: FormEvent) {
+    event.preventDefault();
+    setBusy(true);
+    setError(null);
+    try {
+      const saved = await api.saveModelCredential(token, { provider, apiKey, model });
+      setSetup((current) => (current ? { ...current, credential: saved } : current));
+      setApiKey("");
+      setShowKey(false);
+      setModel(saved.model);
+      await reload();
+      toast("Model key saved");
+    } catch (reason) {
+      setError(errorMessage(reason, "Could not save the model key."));
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  async function remove() {
+    setBusy(true);
+    setError(null);
+    try {
+      await api.deleteModelCredential(token);
+      setSetup((current) => (current ? { ...current, credential: null } : current));
+      setApiKey("");
+      setModel("");
+      setModels([]);
+      await reload();
+      toast("Model key removed");
+    } catch (reason) {
+      setError(errorMessage(reason, "Could not remove the model key."));
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  if (!setup && !error) {
+    return (
+      <div className="flex h-40 items-center justify-center">
+        <Spinner />
+      </div>
+    );
+  }
+
+  return (
+    <div className="space-y-6">
+      <p className="text-sm leading-relaxed text-zinc-500">
+        Grouping work into the map uses a model key you provide. OpenAI, Anthropic, and Gemini are supported. The key is stored encrypted, and only its last
+        four characters are shown again. Repositories you own are analyzed with your key. When several owners have saved one, the key saved most recently is
+        used.
+        {setup?.serverFallback
+          ? " If no owner has saved a key, analysis uses the server OpenAI key."
+          : " If no owner has saved a key, analysis waits until one is added."}
+      </p>
+      {setup?.credential ? (
+        <div className="flex items-start justify-between gap-4 rounded-xl p-4 ring-1 ring-zinc-200">
+          <div>
+            <p className="text-sm font-medium text-zinc-900">
+              {providerLabel(setup.credential.provider)}
+              <span className="font-normal text-zinc-500"> · key ending in {setup.credential.hint}</span>
+            </p>
+            <p className="mt-0.5 text-sm text-zinc-500">
+              Model {setup.credential.model} · updated <TimeAgo iso={setup.credential.updatedAt} />
+            </p>
+          </div>
+          <Button size="sm" variant="ghost" disabled={busy} onClick={() => void remove()}>
+            Remove
+          </Button>
+        </div>
+      ) : null}
+      {setup ? (
+        <form onSubmit={(event) => void save(event)} className="space-y-4">
+          <Field label="Supplier" hint={selected?.keyHint}>
+            <div className="relative">
+              <select
+                value={provider}
+                onChange={(event) => {
+                  setProvider(event.target.value as ModelProviderId);
+                  setModel("");
+                  setModels([]);
+                }}
+                className={cx(inputClass, "appearance-none pr-9")}
+              >
+                {setup.providers.map((entry) => (
+                  <option key={entry.id} value={entry.id}>
+                    {entry.label}
+                  </option>
+                ))}
+              </select>
+              <ChevronDown className="pointer-events-none absolute top-1/2 right-3 size-4 -translate-y-1/2 text-zinc-400" />
+            </div>
+          </Field>
+          <Field
+            label="Model"
+            hint={
+              modelsLoading
+                ? "Loading models from this supplier."
+                : models.length > 0
+                  ? "Models from this supplier that can generate text."
+                  : "Paste an API key to load this supplier's models."
+            }
+          >
+            <div className="relative">
+              <select
+                value={models.some((item) => item.id === model) ? model : ""}
+                onChange={(event) => setModel(event.target.value)}
+                disabled={modelsLoading || models.length === 0}
+                className={cx(inputClass, "appearance-none pr-9 disabled:bg-zinc-50 disabled:text-zinc-500")}
+              >
+                {models.length === 0 ? (
+                  <option value="">{modelsLoading ? "Loading models…" : "Paste an API key to load models"}</option>
+                ) : (
+                  models.map((item) => (
+                    <option key={item.id} value={item.id}>
+                      {item.label === item.id ? item.id : `${item.label} (${item.id})`}
+                    </option>
+                  ))
+                )}
+              </select>
+              <ChevronDown className="pointer-events-none absolute top-1/2 right-3 size-4 -translate-y-1/2 text-zinc-400" />
+            </div>
+          </Field>
+          <Field label="API key" hint={setup.credential ? `Paste a new key to replace the one ending in ${setup.credential.hint}.` : "Paste the key from the supplier."}>
+            <div className="relative">
+              <input
+                type={showKey ? "text" : "password"}
+                value={apiKey}
+                onChange={(event) => setApiKey(event.target.value)}
+                autoComplete="off"
+                spellCheck={false}
+                className={cx(inputClass, "pr-16")}
+              />
+              <button
+                type="button"
+                onClick={() => setShowKey((value) => !value)}
+                className="absolute top-1/2 right-2 -translate-y-1/2 rounded-md px-1.5 py-0.5 text-xs font-medium text-zinc-500 hover:text-zinc-800"
+              >
+                {showKey ? "Hide" : "Show"}
+              </button>
+            </div>
+          </Field>
+          <ErrorNote>{modelsError}</ErrorNote>
+          <ErrorNote>{error}</ErrorNote>
+          <Button type="submit" variant="primary" loading={busy} disabled={apiKey.trim() === "" || model === "" || modelsLoading}>
+            Save key
+          </Button>
+        </form>
+      ) : (
+        <ErrorNote>{error}</ErrorNote>
+      )}
     </div>
   );
 }

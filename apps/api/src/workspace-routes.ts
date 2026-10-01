@@ -19,6 +19,17 @@ import {
   saveProfile,
   type Role,
 } from "./workspace.js";
+import { deleteModelCredential, readModelCredential, readStoredModelKey, resolvedModel, saveModelCredential } from "./model-credentials.js";
+import {
+  checkModelKey,
+  isModelProviderId,
+  listSupplierModels,
+  modelIdPattern,
+  modelProviders,
+  type ListSupplierModels,
+  type ModelKeyCheck,
+} from "./model-providers.js";
+import { modelSecretsConfigured, ModelSecretsError } from "./secret-box.js";
 
 export type MemberAccess = (req: Request, res: Response) => Promise<{ user: AuthUser; projectId: string; role: Role } | null>;
 
@@ -35,15 +46,28 @@ const layoutBody = z.object({
     .array(z.object({ nodeId: uuid, x: z.number().finite(), y: z.number().finite() }))
     .max(500),
 });
+const saveModelBody = z.object({
+  provider: z.string(),
+  apiKey: z.string(),
+  model: z.string(),
+});
+const listModelsBody = z.object({
+  provider: z.string(),
+  apiKey: z.string(),
+});
 
 export function workspaceRouter(input: {
   pool: Pool;
   authenticate: (req: Request, res: Response) => Promise<AuthUser | null>;
   member: MemberAccess;
   lookupGithubAccount?: GithubAccountLookup | undefined;
+  checkModelKey?: ModelKeyCheck | undefined;
+  listSupplierModels?: ListSupplierModels | undefined;
 }): Router {
   const router = Router();
   const { pool, authenticate, member, lookupGithubAccount } = input;
+  const verifyModelKey = input.checkModelKey ?? checkModelKey;
+  const listModels = input.listSupplierModels ?? listSupplierModels;
 
   async function owner(req: Request, res: Response) {
     const allowed = await member(req, res);
@@ -64,6 +88,119 @@ export function workspaceRouter(input: {
       user: { id: user.id, githubLogin: user.githubLogin ?? null, name: user.name ?? null, avatarUrl: user.avatarUrl ?? null },
       invitations: await listPendingInvitations(pool, user),
     });
+  });
+
+  router.get("/me/model", async (req, res) => {
+    const user = await authenticate(req, res);
+    if (!user) {
+      return;
+    }
+    res.json({
+      credential: await readModelCredential(pool, user.id),
+      serverFallback: Boolean(process.env.OPENAI_API_KEY?.trim()),
+      providers: modelProviders.map((provider) => ({
+        id: provider.id,
+        label: provider.label,
+        defaultModel: provider.defaultModel,
+        keyHint: provider.keyHint,
+      })),
+    });
+  });
+
+  router.put("/me/model", async (req, res) => {
+    const user = await authenticate(req, res);
+    if (!user) {
+      return;
+    }
+    const parsed = saveModelBody.safeParse(req.body);
+    if (!parsed.success) {
+      res.status(400).json({ error: "Choose OpenAI, Anthropic, or Gemini, and paste an API key." });
+      return;
+    }
+    if (!isModelProviderId(parsed.data.provider)) {
+      res.status(400).json({ error: "Choose OpenAI, Anthropic, or Gemini." });
+      return;
+    }
+    const apiKey = parsed.data.apiKey.trim();
+    if (/\s/.test(apiKey)) {
+      res.status(400).json({ error: "The key contains a space. Paste the key by itself." });
+      return;
+    }
+    if (apiKey.length < 12 || apiKey.length > 400) {
+      res.status(400).json({ error: "Paste the supplier's API key." });
+      return;
+    }
+    const model = resolvedModel(parsed.data.provider, parsed.data.model);
+    if (!modelIdPattern.test(model)) {
+      res.status(400).json({ error: "Enter a model id such as gpt-5-nano, or leave it blank to use the default." });
+      return;
+    }
+    if (!modelSecretsConfigured()) {
+      res.status(503).json({ error: "Set APM_SECRETS_KEY on the API before saving a model key. It encrypts keys at rest." });
+      return;
+    }
+    const checked = await verifyModelKey({ provider: parsed.data.provider, apiKey, model });
+    if (!checked.ok) {
+      res.status(400).json({ error: checked.error });
+      return;
+    }
+    try {
+      res.json(await saveModelCredential(pool, user.id, { provider: parsed.data.provider, apiKey, model }));
+    } catch (error) {
+      if (error instanceof ModelSecretsError) {
+        res.status(503).json({ error: error.message });
+        return;
+      }
+      throw error;
+    }
+  });
+
+  router.post("/me/model/models", async (req, res) => {
+    const user = await authenticate(req, res);
+    if (!user) {
+      return;
+    }
+    const parsed = listModelsBody.safeParse(req.body);
+    if (!parsed.success || !isModelProviderId(parsed.data.provider)) {
+      res.status(400).json({ error: "Choose OpenAI, Anthropic, or Gemini." });
+      return;
+    }
+    let apiKey = parsed.data.apiKey.trim();
+    if (apiKey && (/\s/.test(apiKey) || apiKey.length < 12 || apiKey.length > 400)) {
+      res.status(400).json({ error: "Paste the supplier's API key." });
+      return;
+    }
+    if (!apiKey) {
+      try {
+        const stored = await readStoredModelKey(pool, user.id);
+        if (!stored || stored.provider !== parsed.data.provider) {
+          res.status(400).json({ error: "Paste an API key to load this supplier's models." });
+          return;
+        }
+        apiKey = stored.apiKey;
+      } catch (error) {
+        if (error instanceof ModelSecretsError) {
+          res.status(503).json({ error: error.message });
+          return;
+        }
+        throw error;
+      }
+    }
+    const listed = await listModels({ provider: parsed.data.provider, apiKey });
+    if (!listed.ok) {
+      res.status(400).json({ error: listed.error });
+      return;
+    }
+    res.json({ models: listed.models });
+  });
+
+  router.delete("/me/model", async (req, res) => {
+    const user = await authenticate(req, res);
+    if (!user) {
+      return;
+    }
+    await deleteModelCredential(pool, user.id);
+    res.status(204).end();
   });
 
   router.post("/invitations/:invitationId/accept", async (req, res) => {

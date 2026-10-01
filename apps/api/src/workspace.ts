@@ -1,6 +1,8 @@
 import type { Pool } from "pg";
 import type { AuthUser } from "./auth.js";
 import { inTransaction } from "./graph/process.js";
+import { ownerModelSource } from "./model-credentials.js";
+import type { ModelProviderId } from "./model-providers.js";
 
 export type Role = "owner" | "member";
 
@@ -33,6 +35,7 @@ export type ProjectSettings = {
       gaveUp: number;
       lastAnalyzedAt: string | null;
       lastFailure: { at: string; error: string } | null;
+      model: { provider: ModelProviderId | null; source: "owner" | "server" | "none" };
     };
   };
 };
@@ -314,6 +317,8 @@ export async function readSettings(pool: Pool, input: { projectId: string; userI
   const latest = batches.rows[0];
   const githubRow = github.rows[0];
   const waitingRow = waiting.rows[0];
+  const ownerProvider = await ownerModelSource(pool, row.workspace_id);
+  const serverKey = Boolean(process.env.OPENAI_API_KEY?.trim());
 
   return {
     project: {
@@ -363,6 +368,10 @@ export async function readSettings(pool: Pool, input: { projectId: string; userI
           latest && latest.status === "failed" && latest.error && !latest.error.startsWith("superseded")
             ? { at: latest.completed_at.toISOString(), error: latest.error }
             : null,
+        model: {
+          provider: ownerProvider ?? (serverKey ? "openai" : null),
+          source: ownerProvider ? "owner" : serverKey ? "server" : "none",
+        },
       },
     },
   };

@@ -1,6 +1,6 @@
 import PgBoss from "pg-boss";
 import type { Pool } from "pg";
-import { dueProjects, processProject, type Interpreter, type ProcessResult } from "@apm/api/graph/process";
+import { dueProjects, processProject, type InterpretationSchedule, type Interpreter, type ProcessResult } from "@apm/api/graph/process";
 import { insertEvents, processQueuedDeliveries } from "@apm/api/store";
 import type { GithubLookup } from "@apm/github-collector/enrich";
 import { refreshObservedGithub } from "@apm/github-collector/refresh";
@@ -20,7 +20,12 @@ export type RunningWorker = {
 
 export type ProjectProcessing = {
   pool: Pool;
-  interpreter: Interpreter | null;
+  /** Used when resolveInterpreter is not set. */
+  interpreter?: Interpreter | null;
+  /** Picks the model key for one project. An owner's saved key is preferred over a server OpenAI key. */
+  resolveInterpreter?: (projectId: string) => Promise<Interpreter | null>;
+  /** Which projects are queued for interpretation. Defaults from whether a static interpreter is set. */
+  interpretation?: InterpretationSchedule;
   dispatchEveryMs?: number;
   concurrency?: number;
 };
@@ -87,7 +92,10 @@ export async function startWorker(input: {
     for (let slot = 0; slot < (processing.concurrency ?? defaultProjectConcurrency); slot += 1) {
       await boss.work<{ projectId: string }>(processProjectQueue, { pollingIntervalSeconds: 1 }, async (jobs) => {
         for (const job of jobs) {
-          const result = await processProject(processing.pool, job.data.projectId, { interpreter: processing.interpreter, log });
+          const interpreter = processing.resolveInterpreter
+            ? await processing.resolveInterpreter(job.data.projectId)
+            : (processing.interpreter ?? null);
+          const result = await processProject(processing.pool, job.data.projectId, { interpreter, log });
           const summary = describeProcessing(result);
           if (summary) {
             log(`${processProjectQueue} ${job.data.projectId}: ${summary}`);
@@ -96,7 +104,9 @@ export async function startWorker(input: {
       });
     }
     dispatch = async () => {
-      const projects = await dueProjects(processing.pool, { includeInterpretation: processing.interpreter !== null });
+      const projects = await dueProjects(processing.pool, {
+        interpretation: processing.interpretation ?? (processing.interpreter ? "all" : "none"),
+      });
       for (const projectId of projects) {
         await boss.send(processProjectQueue, { projectId }, { singletonKey: projectId });
       }

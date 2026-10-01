@@ -10,6 +10,7 @@ import { graphRouter } from "./graph/routes.js";
 import { workspaceRouter } from "./workspace-routes.js";
 import { listProjectRoles, projectRole, type Role } from "./workspace.js";
 import { ingestEvents } from "./ingest-events.js";
+import type { ListSupplierModels, ModelKeyCheck } from "./model-providers.js";
 import {
   connectRepository,
   enqueueDelivery,
@@ -33,6 +34,10 @@ export type AppDeps = {
   verifyRepositoryAccess: RepositoryAccessCheck;
   github?: GithubLookup;
   lookupGithubAccount?: GithubAccountLookup;
+  /** Checks a model key with the supplier. Tests pass a stub. */
+  modelKeyCheck?: ModelKeyCheck;
+  /** Lists models for a key. Tests pass a stub. */
+  listSupplierModels?: ListSupplierModels;
 };
 
 const ingestBody = z.object({
@@ -258,6 +263,8 @@ export function createApp(deps: AppDeps) {
       authenticate: (req, res) => requireUser(deps, req, res),
       member: (req, res) => projectMember(deps, req, res),
       lookupGithubAccount: deps.lookupGithubAccount,
+      ...(deps.modelKeyCheck ? { checkModelKey: deps.modelKeyCheck } : {}),
+      ...(deps.listSupplierModels ? { listSupplierModels: deps.listSupplierModels } : {}),
     }),
   );
 
