@@ -37,9 +37,12 @@ flowchart TD
 - `src/auth.ts` checks a Supabase access token and returns the signed-in user.
 - `src/store.ts` stores projects, inserts events, and finishes queued webhook deliveries.
 - `src/ingest-events.ts` checks an uploaded batch and stores the session events that pass.
-- `src/collector-tokens.ts` creates a pairing code, exchanges it for a device token, and revokes that token.
+- `src/helper-tokens.ts` creates a pairing code, exchanges it for a device token, and revokes that token.
 - `src/workspace.ts` stores members, invitations, settings, and the saved map layout.
 - `src/workspace-routes.ts` serves the settings HTTP routes for members, invitations, devices, and layout.
+- `src/model-credentials.ts` stores a project owner's model key and chooses the interpreter for that project.
+- `src/model-providers.ts` describes OpenAI, Anthropic, and Gemini, and checks a key with that supplier.
+- `src/secret-box.ts` encrypts a saved model key with `APM_SECRETS_KEY`.
 - `src/demo/seed-demo.ts` fills a local database with a demo project and runs it through map processing.
 - `src/graph/routes.ts` serves the map, a work item, a feature, and a correction.
 - `src/graph/graph-read.ts` reads the current map, one work item, one feature, and whether analysis is still pending.
@@ -53,5 +56,7 @@ flowchart TD
 - `src/graph/corrections.ts` applies a person’s edit to a feature or work item and records it as a correction.
 - `src/graph/state.ts` computes a work item’s state from its pull requests.
 - `src/graph/artifact-state.ts` defines the stored shape of a pull request and a workflow run.
-- `src/graph/openai-interpreter.ts` sends the prompt to OpenAI and parses the operations that come back.
+- `src/graph/graph-prompt.ts` holds the instructions and prompt version sent to every model supplier.
+- `src/graph/model-interpreter.ts` sends that prompt to OpenAI, Anthropic, or Gemini and parses the operations that come back.
+- `src/graph/openai-interpreter.ts` is the OpenAI call, and the fallback used when only `OPENAI_API_KEY` is set.
 - `src/graph/eval-grouping.ts` runs saved session fixtures through the model and prints how the grouping came out.

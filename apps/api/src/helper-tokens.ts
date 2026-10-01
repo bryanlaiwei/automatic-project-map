@@ -3,13 +3,13 @@ import type { Pool } from "pg";
 
 const pairingTtlMs = 10 * 60 * 1000;
 
-export type CollectorDevice = {
+export type HelperDevice = {
   id: string;
   projectId: string;
   trackingStartedAt: string;
 };
 
-export function hashCollectorSecret(value: string): string {
+export function hashHelperSecret(value: string): string {
   return createHash("sha256").update(value).digest("hex");
 }
 
@@ -23,7 +23,7 @@ export async function createPairingCode(
   await pool.query(
     `insert into collector_pairing_codes (code_hash, project_id, user_id, expires_at)
      values ($1, $2, $3, $4)`,
-    [hashCollectorSecret(code), input.projectId, input.userId, expiresAt.toISOString()],
+    [hashHelperSecret(code), input.projectId, input.userId, expiresAt.toISOString()],
   );
   return { code, expiresAt: expiresAt.toISOString() };
 }
@@ -31,7 +31,7 @@ export async function createPairingCode(
 export async function exchangePairingCode(
   pool: Pool,
   input: { code: string; label?: string; now?: Date },
-): Promise<{ token: string; device: CollectorDevice } | { error: "invalid_code" }> {
+): Promise<{ token: string; device: HelperDevice } | { error: "invalid_code" }> {
   const now = input.now ?? new Date();
   const client = await pool.connect();
   try {
@@ -43,7 +43,7 @@ export async function exchangePairingCode(
        join memberships m on m.workspace_id = p.workspace_id and m.user_id = c.user_id
        where c.code_hash = $1 and c.used_at is null and c.expires_at > $2
        for update of c`,
-      [hashCollectorSecret(input.code), now.toISOString()],
+      [hashHelperSecret(input.code), now.toISOString()],
     );
     const row = found.rows[0];
     if (!row) {
@@ -51,7 +51,7 @@ export async function exchangePairingCode(
       return { error: "invalid_code" };
     }
     await client.query(`update collector_pairing_codes set used_at = $2 where code_hash = $1`, [
-      hashCollectorSecret(input.code),
+      hashHelperSecret(input.code),
       now.toISOString(),
     ]);
     const token = `apm_${randomBytes(32).toString("base64url")}`;
@@ -59,11 +59,11 @@ export async function exchangePairingCode(
       `insert into collector_tokens (project_id, label, token_hash, user_id)
        values ($1, $2, $3, $4)
        returning id`,
-      [row.project_id, input.label?.trim() || "local helper", hashCollectorSecret(token), row.user_id],
+      [row.project_id, input.label?.trim() || "local helper", hashHelperSecret(token), row.user_id],
     );
     const id = inserted.rows[0]?.id;
     if (!id) {
-      throw new Error("Collector token insert did not return an id");
+      throw new Error("Helper token insert did not return an id");
     }
     await client.query("commit");
     return {
@@ -83,7 +83,7 @@ export async function exchangePairingCode(
 }
 
 /** Finds the device behind a token and records that it was seen, for the Settings device list. */
-export async function findCollectorDevice(pool: Pool, token: string): Promise<CollectorDevice | null> {
+export async function findHelperDevice(pool: Pool, token: string): Promise<HelperDevice | null> {
   if (token.trim() === "") {
     return null;
   }
@@ -96,7 +96,7 @@ export async function findCollectorDevice(pool: Pool, token: string): Promise<Co
      select seen.id, seen.project_id, p.tracking_started_at
      from seen
      join projects p on p.id = seen.project_id`,
-    [hashCollectorSecret(token)],
+    [hashHelperSecret(token)],
   );
   const row = result.rows[0];
   if (!row) {
@@ -105,12 +105,12 @@ export async function findCollectorDevice(pool: Pool, token: string): Promise<Co
   return { id: row.id, projectId: row.project_id, trackingStartedAt: row.tracking_started_at.toISOString() };
 }
 
-export async function revokeCollectorToken(pool: Pool, token: string): Promise<boolean> {
+export async function revokeHelperToken(pool: Pool, token: string): Promise<boolean> {
   const result = await pool.query(
     `update collector_tokens
      set revoked_at = now()
      where token_hash = $1 and revoked_at is null`,
-    [hashCollectorSecret(token)],
+    [hashHelperSecret(token)],
   );
   return (result.rowCount ?? 0) > 0;
 }

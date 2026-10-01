@@ -19,7 +19,7 @@ function capture() {
   };
 }
 
-describe("collector CLI", () => {
+describe("local helper CLI", () => {
   it("parses a session and prints whether it is eligible", async () => {
     const output = capture();
     const result = await runCli([fixture, trackingStartedAt, "codex", "/Projects/my-app"], {}, output.io);

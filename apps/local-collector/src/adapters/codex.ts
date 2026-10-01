@@ -20,10 +20,6 @@ function asString(value: unknown): string | null {
   return typeof value === "string" && value.length > 0 ? value : null;
 }
 
-export function readJsonLines(filePath: string): JsonRecord[] {
-  return parseJsonLines(readFileSync(filePath, "utf8"));
-}
-
 export function parseJsonLines(text: string): JsonRecord[] {
   if (text === "") {
     return [];

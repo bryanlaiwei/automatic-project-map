@@ -2,16 +2,9 @@
 // The thirty-second scan does not use this command.
 
 import { realpathSync } from "node:fs";
-import {
-  evaluateSessionEligibility,
-  normalizedEventSchema,
-  SCHEMA_VERSION,
-  sessionContentEventId,
-  type NormalizedEvent,
-  type SessionMessage,
-} from "@apm/shared";
+import { evaluateSessionEligibility, type NormalizedEvent } from "@apm/shared";
 import { agentById } from "./agents.js";
-import { contentGroups } from "./build-events.js";
+import { buildEvents } from "./build-events.js";
 import type { SessionAgentId } from "./contract/adapter.js";
 import type { ParsedSession } from "./contract/session.js";
 
@@ -97,68 +90,16 @@ export function eventsFromParsedSession(input: {
   return {
     eligible: true,
     reason: null,
-    events: sessionEvents({
+    events: buildEvents({
       projectId: input.projectId,
       agent: input.agent,
       sessionId,
       createdAt,
       sourceVersion: input.parsed.sourceVersion,
       records: input.parsed.records,
+      includeStarted: true,
     }),
   };
-}
-
-function sessionEvents(input: {
-  projectId: string;
-  agent: SessionAgentId;
-  sessionId: string;
-  createdAt: string;
-  sourceVersion: string | null;
-  records: SessionMessage[];
-}): NormalizedEvent[] {
-  const startedId = `${input.agent}:${input.sessionId}:started`;
-  const events: NormalizedEvent[] = [
-    normalizedEventSchema.parse({
-      schemaVersion: SCHEMA_VERSION,
-      eventId: startedId,
-      sourceKey: startedId,
-      projectId: input.projectId,
-      source: input.agent,
-      occurredAt: input.createdAt,
-      details: {
-        kind: "session.started",
-        sessionId: input.sessionId,
-        createdAt: input.createdAt,
-        sourceVersion: input.sourceVersion,
-      },
-    }),
-  ];
-  for (const records of contentGroups(input.records)) {
-    const first = records[0];
-    if (!first) {
-      continue;
-    }
-    const contentId = sessionContentEventId(input.agent, input.sessionId, records);
-    events.push(
-      normalizedEventSchema.parse({
-        schemaVersion: SCHEMA_VERSION,
-        eventId: contentId,
-        sourceKey: contentId,
-        projectId: input.projectId,
-        source: input.agent,
-        occurredAt: first.occurredAt,
-        details: {
-          kind: "session.content_added",
-          sessionId: input.sessionId,
-          createdAt: input.createdAt,
-          sourceVersion: input.sourceVersion,
-          recordIds: records.map((record) => record.id),
-          messages: records,
-        },
-      }),
-    );
-  }
-  return events;
 }
 
 export function collectSession(input: CollectInput): CollectResult {

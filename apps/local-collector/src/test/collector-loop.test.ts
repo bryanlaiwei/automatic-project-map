@@ -84,7 +84,7 @@ describe("collector loop", () => {
             throw new UploadError("Service unavailable", 503);
           }
           if (mode === "revoked") {
-            throw new UploadError("Sign in or a collector token is required.", 401);
+            throw new UploadError("Sign in or a helper token is required.", 401);
           }
           return acceptingTransport(requests).send(input);
         },

@@ -270,7 +270,7 @@ export const api = {
     request<void>(`/projects/${projectId}/devices/${deviceId}`, token, { method: "DELETE" }),
   deleteProject: (token: string, projectId: string) => request<void>(`/projects/${projectId}`, token, { method: "DELETE" }),
   pairingCode: (token: string, projectId: string) =>
-    request<{ code: string; expiresAt: string }>(`/projects/${projectId}/collector/pairing-codes`, token, { method: "POST" }),
+    request<{ code: string; expiresAt: string }>(`/projects/${projectId}/helper/pairing-codes`, token, { method: "POST" }),
 };
 
 export type HelperFolder = { id: string; canonicalPath: string; enabled: boolean };

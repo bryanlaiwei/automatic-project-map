@@ -74,7 +74,7 @@ export function buildEvents(input: {
   return events;
 }
 
-export function contentGroups(records: readonly SessionMessage[]): SessionMessage[][] {
+function contentGroups(records: readonly SessionMessage[]): SessionMessage[][] {
   const groups: SessionMessage[][] = [];
   let current: SessionMessage[] = [];
   let chars = 0;

@@ -252,7 +252,7 @@ async function pullRequestArtifact(project: TestProject, number: number): Promis
   return id;
 }
 
-describe("Day 3 interpretation and map maintenance", () => {
+describe("interpretation and map maintenance", () => {
   let server: Server;
   let baseUrl = "";
   const tokens = new Map<string, string>();
