@@ -33,7 +33,7 @@ flowchart TD
 - `src/index.ts` starts the command-line entry and exits with the command’s status code, except `serve`, which stays running.
 - `src/cli.ts` either prints events for one log file or starts the local server and the 30-second loop.
 - `src/collector-loop.ts` scans and uploads about every 30 seconds, and waits longer after an upload failure.
-- `src/local-server.ts` serves pairing, folder selection, and helper status on this machine only.
+- `src/local-server.ts` is the local API for pairing, folder selection, and helper status. The web app renders that page.
 - `src/local-db.ts` stores pairing, selected folders, session checkpoints, and the upload outbox in SQLite.
 - `src/collection-pass.ts` decides which discovered sessions are eligible, writes their events into the outbox, and advances the checkpoint with that queue.
 - `src/find-sessions.ts` finds session files under an agent’s log directory and reads the ones that changed.

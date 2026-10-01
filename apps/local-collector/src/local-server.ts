@@ -1,12 +1,12 @@
-// HTTP server on this computer that the web app uses to pair, choose folders, and see helper status.
-// It accepts connections only from this machine.
+// HTTP API on this computer that the web app uses to pair, choose folders, and see helper status.
+// It accepts connections only from this machine. The pages themselves live in the web app.
 
 import { createServer, type IncomingMessage, type Server, type ServerResponse } from "node:http";
 import { realpathSync } from "node:fs";
 import type { AddressInfo } from "node:net";
+import { agents } from "./agents.js";
 import type { LogRoots } from "./collection-pass.js";
 import type { CollectorStatus } from "./collector-loop.js";
-import { renderHelperPage } from "./helper-page.js";
 import { LocalDb } from "./local-db.js";
 
 const defaultPort = 47321;
@@ -24,7 +24,6 @@ export type LocalServerOptions = {
 export async function startLocalServer(options: LocalServerOptions): Promise<Server> {
   const webOrigin = options.webOrigin ?? "http://127.0.0.1:5173";
   const fetchImpl = options.fetchImpl ?? fetch;
-  const secret = options.db.localSecret();
 
   const server = createServer(async (req, res) => {
     const port = (server.address() as AddressInfo).port;
@@ -44,16 +43,25 @@ export async function startLocalServer(options: LocalServerOptions): Promise<Ser
     const url = new URL(req.url ?? "/", `http://127.0.0.1:${port}`);
     try {
       if (req.method === "GET" && url.pathname === "/") {
-        const headers: Record<string, string> = {
-          "Content-Type": "text/html; charset=utf-8",
-          "X-Frame-Options": "DENY",
-          "Content-Security-Policy": "frame-ancestors 'none'",
-        };
-        if (isTopLevelVisit(req)) {
-          headers["Set-Cookie"] = sessionCookie(secret);
-        }
-        res.writeHead(200, headers);
-        res.end(renderHelperPage(options.db, options.logRoots ?? {}, options.status?.() ?? null));
+        const pairing = options.db.getPairing();
+        send(
+          res,
+          200,
+          {
+            pairing: pairing
+              ? { projectId: pairing.projectId, trackingStartedAt: pairing.trackingStartedAt, apiUrl: pairing.apiUrl }
+              : null,
+            folders: options.db.folders().map((folder) => ({
+              id: folder.id,
+              canonicalPath: folder.canonicalPath,
+              enabled: folder.enabled,
+            })),
+            logRoots: logRootList(options.logRoots ?? {}),
+            status: options.status?.() ?? null,
+          },
+          req,
+          webOrigin,
+        );
         return;
       }
       if (req.method === "POST" && url.pathname === "/pair") {
@@ -86,15 +94,15 @@ export async function startLocalServer(options: LocalServerOptions): Promise<Ser
           deviceId: payload.deviceId,
         });
         void options.scanNow?.();
-        send(res, 201, { paired: true, projectId: payload.projectId }, req, webOrigin, secret);
+        send(res, 201, { paired: true, projectId: payload.projectId }, req, webOrigin);
         return;
       }
       if (req.method === "GET" && url.pathname === "/status") {
         send(res, 200, { status: options.status?.() ?? null }, req, webOrigin);
         return;
       }
-      if (!hasCookie(req, secret) && !isFormPost(req)) {
-        send(res, 401, { error: "Open the helper page on this computer first." }, req, webOrigin);
+      if (!fromWebApp(req, webOrigin, port)) {
+        send(res, 401, { error: "Open the helper from the web app on this computer." }, req, webOrigin);
         return;
       }
       if (req.method === "POST" && url.pathname === "/scan") {
@@ -128,11 +136,6 @@ export async function startLocalServer(options: LocalServerOptions): Promise<Ser
         const paired = options.db.getPairing();
         if (paired) {
           options.db.dropUnselected(paired.projectId, options.db.enabledRoots(paired.projectId));
-        }
-        if (isFormPost(req)) {
-          res.writeHead(303, { Location: "/" });
-          res.end();
-          return;
         }
         send(res, 204, null, req, webOrigin);
         return;
@@ -175,6 +178,18 @@ function hostAllowed(req: IncomingMessage, port: number): boolean {
   return host === `127.0.0.1:${port}` || host === `localhost:${port}` || host === `[::1]:${port}`;
 }
 
+function logRootList(roots: LogRoots): Array<{ id: string; path: string }> {
+  return agents.flatMap((agent) => {
+    const path = roots[agent.id];
+    return path ? [{ id: agent.id, path }] : [];
+  });
+}
+
+/** Folder changes come from the web app, which sends its origin. Other callers do not. */
+function fromWebApp(req: IncomingMessage, webOrigin: string, port: number): boolean {
+  return typeof req.headers.origin === "string" && originAllowed(req, webOrigin, port);
+}
+
 function originAllowed(req: IncomingMessage, webOrigin: string, port: number): boolean {
   const origin = req.headers.origin;
   if (!origin) {
@@ -197,28 +212,6 @@ function corsHeaders(req: IncomingMessage, webOrigin: string, port: number): Rec
   return headers;
 }
 
-/**
- * Opening the page in a tab proves the person is at this computer. Frames and
- * scripted requests from other pages do not get the cookie.
- */
-function isTopLevelVisit(req: IncomingMessage): boolean {
-  const destination = req.headers["sec-fetch-dest"];
-  return destination === undefined || destination === "document";
-}
-
-function sessionCookie(secret: string): string {
-  return `apm_local=${secret}; HttpOnly; SameSite=Lax; Path=/`;
-}
-
-function hasCookie(req: IncomingMessage, secret: string): boolean {
-  const cookie = req.headers.cookie ?? "";
-  return cookie.split(";").some((part) => part.trim() === `apm_local=${secret}`);
-}
-
-function isFormPost(req: IncomingMessage): boolean {
-  return req.method === "POST" && (req.headers["content-type"] ?? "").includes("application/x-www-form-urlencoded");
-}
-
 async function readJson(req: IncomingMessage): Promise<Record<string, unknown>> {
   const chunks: Buffer[] = [];
   for await (const chunk of req) {
@@ -228,28 +221,14 @@ async function readJson(req: IncomingMessage): Promise<Record<string, unknown>> 
     return {};
   }
   const text = Buffer.concat(chunks).toString("utf8");
-  if ((req.headers["content-type"] ?? "").includes("application/x-www-form-urlencoded")) {
-    const params = new URLSearchParams(text);
-    return Object.fromEntries(params.entries());
-  }
   const parsed: unknown = JSON.parse(text);
   return typeof parsed === "object" && parsed !== null && !Array.isArray(parsed) ? (parsed as Record<string, unknown>) : {};
 }
 
-function send(
-  res: ServerResponse,
-  status: number,
-  body: unknown,
-  req?: IncomingMessage,
-  webOrigin?: string,
-  cookieSecret?: string,
-): void {
+function send(res: ServerResponse, status: number, body: unknown, req?: IncomingMessage, webOrigin?: string): void {
   const headers: Record<string, string> = { "Content-Type": "application/json" };
   if (req && webOrigin) {
     Object.assign(headers, corsHeaders(req, webOrigin, req.socket.localPort ?? 0));
-  }
-  if (cookieSecret) {
-    headers["Set-Cookie"] = sessionCookie(cookieSecret);
   }
   if (status === 204) {
     res.writeHead(status, headers);

@@ -24,7 +24,7 @@ function tempRoot(): string {
   return root;
 }
 
-describe("local helper page", () => {
+describe("local helper api", () => {
   async function startHelper(root: string) {
     const db = new LocalDb(join(root, "collector.sqlite"));
     let scans = 0;
@@ -67,27 +67,22 @@ describe("local helper page", () => {
     expect(pair.headers.get("access-control-allow-origin")).toBe("http://127.0.0.1:5173");
     expect(helper.db.getPairing()?.deviceId).toBe("device-web");
 
-    const framed = await fetch(helper.base, { headers: { "Sec-Fetch-Dest": "iframe" } });
-    expect(framed.headers.get("set-cookie")).toBeNull();
-    expect(framed.headers.get("x-frame-options")).toBe("DENY");
-
-    const withoutCookie = await fetch(`${helper.base}/folders`, {
+    const outside = await fetch(`${helper.base}/folders`, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ path: root }),
     });
-    expect(withoutCookie.status).toBe(401);
+    expect(outside.status).toBe(401);
 
-    const visit = await fetch(helper.base, { headers: { "Sec-Fetch-Dest": "document" } });
-    const html = await visit.text();
-    expect(html).toContain(`Paired to project <code>${projectId}</code>`);
-    expect(html).toContain(join(root, "codex"));
-    const cookie = visit.headers.get("set-cookie")?.split(";")[0] ?? "";
-    expect(cookie.startsWith("apm_local=")).toBe(true);
+    const visit = await fetch(helper.base, { headers: { Origin: "http://127.0.0.1:5173" } });
+    const overview = (await visit.json()) as { pairing: { projectId: string }; logRoots: Array<{ path: string }> };
+    expect(visit.headers.get("content-type")).toContain("application/json");
+    expect(overview.pairing.projectId).toBe(projectId);
+    expect(overview.logRoots.map((rootEntry) => rootEntry.path)).toContain(join(root, "codex"));
 
     const added = await fetch(`${helper.base}/folders`, {
       method: "POST",
-      headers: { "Content-Type": "application/json", Cookie: cookie },
+      headers: { "Content-Type": "application/json", Origin: "http://127.0.0.1:5173" },
       body: JSON.stringify({ path: root }),
     });
     expect(added.status).toBe(201);
@@ -121,7 +116,7 @@ function openDb(root: string): LocalDb {
 }
 
 describe("local helper", () => {
-  it("pairs from a loopback page and rejects another origin", async () => {
+  it("pairs from the web app and rejects another origin", async () => {
     const root = tempRoot();
     const db = openDb(root);
     let paired = false;
@@ -148,7 +143,8 @@ describe("local helper", () => {
     }
     const base = `http://127.0.0.1:${address.port}`;
     const page = await fetch(base);
-    expect(await page.text()).toContain("Pairing code");
+    const overview = (await page.json()) as { pairing: null };
+    expect(overview.pairing).toBeNull();
     const denied = await fetch(`${base}/pair`, {
       method: "POST",
       headers: { Origin: "https://evil.example", "Content-Type": "application/json" },
