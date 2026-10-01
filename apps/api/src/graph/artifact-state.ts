@@ -53,8 +53,6 @@ export const workflowRunStateSchema = z.object({
 });
 
 export type WorkflowRunState = z.infer<typeof workflowRunStateSchema>;
-export type WorkflowRunJob = z.infer<typeof runJobSchema>;
-export type WorkflowRunAttempt = z.infer<typeof runAttemptSchema>;
 
 /** The parts of a pull request a viewer sees in an expanded work item. */
 export function visiblePullRequest(state: PullRequestState) {

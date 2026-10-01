@@ -28,7 +28,7 @@ const repositories: Record<string, number> = { team: 88_005_001, own: 88_005_002
 const repoId = repositories.team ?? 0;
 const workspaceNames = Object.keys(repositories).map((name) => `day4/${name}`);
 
-describe("Day 4 membership, settings and layout", () => {
+describe("membership, settings and layout", () => {
   let server: Server;
   let baseUrl = "";
   let projectId = "";
@@ -165,8 +165,8 @@ describe("Day 4 membership, settings and layout", () => {
   });
 
   it("stops a removed member's web access and the helper they paired", async () => {
-    const code = (await (await call("mate", `/projects/${projectId}/collector/pairing-codes`, { method: "POST" })).json()) as { code: string };
-    const paired = (await (await fetch(`${baseUrl}/collector/pair`, {
+    const code = (await (await call("mate", `/projects/${projectId}/helper/pairing-codes`, { method: "POST" })).json()) as { code: string };
+    const paired = (await (await fetch(`${baseUrl}/helper/pair`, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ code: code.code, label: "mate laptop" }),
@@ -179,14 +179,14 @@ describe("Day 4 membership, settings and layout", () => {
     };
     expect(settings.devices).toEqual([expect.objectContaining({ id: paired.deviceId, label: "mate laptop", pairedBy: "Day4-Mate" })]);
     expect(settings.devices[0]?.lastSeenAt).not.toBeNull();
-    const unusedCode = (await (await call("mate", `/projects/${projectId}/collector/pairing-codes`, { method: "POST" })).json()) as { code: string };
+    const unusedCode = (await (await call("mate", `/projects/${projectId}/helper/pairing-codes`, { method: "POST" })).json()) as { code: string };
 
     expect((await call("mate", `/projects/${projectId}/members/${people.owner?.id}`, { method: "DELETE" })).status).toBe(403);
     expect((await call("owner", `/projects/${projectId}/members/${people.owner?.id}`, { method: "DELETE" })).status).toBe(409);
     expect((await call("owner", `/projects/${projectId}/members/${people.mate?.id}`, { method: "DELETE" })).status).toBe(204);
     expect((await call("mate", `/projects/${projectId}/graph`)).status).toBe(404);
     expect((await upload()).status).toBe(401);
-    const lateExchange = await fetch(`${baseUrl}/collector/pair`, {
+    const lateExchange = await fetch(`${baseUrl}/helper/pair`, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ code: unusedCode.code }),

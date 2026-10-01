@@ -17,12 +17,12 @@ flowchart TD
   read --> text["Keep user and assistant text"]
   text --> eligible{"Folder matches a selected root and the session is new enough?"}
   eligible -->|no| skip["Skip or pause the session"]
-  eligible -->|yes| rows["Split text into event rows of at most 8,000 characters"]
+  eligible -->|yes| rows["Split into events of at most 8,000 characters, 200 messages, and 256 KiB"]
 
-  rows --> sqlite["Store the rows in the local outbox"]
+  rows --> sqlite["Queue the rows and advance the checkpoint"]
   sqlite --> upload["Upload to the API"]
   upload --> ok{"API accepted them?"}
-  ok -->|yes| done["Remove them from the outbox and advance the checkpoint"]
+  ok -->|yes| done["Remove them from the outbox"]
   ok -->|no| retry["Leave them queued and wait longer before the next upload"]
 ```
 
@@ -35,7 +35,7 @@ flowchart TD
 - `src/collector-loop.ts` scans and uploads about every 30 seconds, and waits longer after an upload failure.
 - `src/local-server.ts` serves pairing, folder selection, and helper status on this machine only.
 - `src/local-db.ts` stores pairing, selected folders, session checkpoints, and the upload outbox in SQLite.
-- `src/collection-pass.ts` decides which discovered sessions are eligible and writes their events into the outbox.
+- `src/collection-pass.ts` decides which discovered sessions are eligible, writes their events into the outbox, and advances the checkpoint with that queue.
 - `src/find-sessions.ts` finds session files under an agent’s log directory and reads the ones that changed.
 - `src/change-tracker.ts` remembers each log file’s size and modification time so an unchanged session is skipped.
 - `src/read-after-offset.ts` reads only the bytes of a session log that come after the saved checkpoint.
@@ -48,6 +48,6 @@ flowchart TD
 - `src/adapters/claude-code.ts` reads a Claude Code jsonl file and keeps lines whose type is `user` or `assistant`.
 - `src/adapters/cursor.ts` reads a Cursor session directory and keeps transcript lines whose role is `user` or `assistant`.
 - `src/message-text.ts` keeps written message text, drops hidden reasoning, and replaces tool calls with `[tool output omitted]`.
-- `src/build-events.ts` turns new messages into `session.started` and `session.content_added` events, splitting text so each row stays within 8,000 characters.
+- `src/build-events.ts` turns new messages into `session.started` and `session.content_added` events. Each event stays within 8,000 characters, 200 messages, and 256 KiB.
 - `src/upload-outbox.ts` sends queued events to the API and leaves failed uploads in the outbox for a later try.
 - `src/parse-file.ts` reads one log file and prints the events it would produce. The 30-second scan does not use it.
