@@ -7,7 +7,8 @@
     "./db": "./src/db.ts",
     "./store": "./src/store.ts",
     "./graph/process": "./src/graph/process.ts",
-    "./graph/openai-interpreter": "./src/graph/openai-interpreter.ts"
+    "./graph/openai-interpreter": "./src/graph/openai-interpreter.ts",
+    "./model-credentials": "./src/model-credentials.ts"
   },
   "type": "module",
   "scripts": {

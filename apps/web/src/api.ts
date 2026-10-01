@@ -152,9 +152,27 @@ export type ProjectSettings = {
       gaveUp: number;
       lastAnalyzedAt: string | null;
       lastFailure: { at: string; error: string } | null;
+      model: { provider: "openai" | "anthropic" | "gemini" | null; source: "owner" | "server" | "none" };
     };
   };
 };
+
+export type ModelProviderId = "openai" | "anthropic" | "gemini";
+
+export type ModelCredential = {
+  provider: ModelProviderId;
+  model: string;
+  hint: string;
+  updatedAt: string;
+};
+
+export type ModelSetup = {
+  credential: ModelCredential | null;
+  serverFallback: boolean;
+  providers: Array<{ id: ModelProviderId; label: string; defaultModel: string; keyHint: string }>;
+};
+
+export type SupplierModel = { id: string; label: string };
 
 export type Correction =
   | { kind: "rename"; target: "feature" | "work_item"; id: string; title: string }
@@ -236,6 +254,12 @@ export const api = {
     request<{ saved: number }>(`/projects/${projectId}/layout`, token, { method: "PUT", body: JSON.stringify({ positions }) }),
 
   settings: (token: string, projectId: string) => request<ProjectSettings>(`/projects/${projectId}/settings`, token),
+  modelSetup: (token: string) => request<ModelSetup>("/me/model", token),
+  supplierModels: (token: string, input: { provider: ModelProviderId; apiKey: string }) =>
+    request<{ models: SupplierModel[] }>("/me/model/models", token, { method: "POST", body: JSON.stringify(input) }),
+  saveModelCredential: (token: string, input: { provider: ModelProviderId; apiKey: string; model: string }) =>
+    request<ModelCredential>("/me/model", token, { method: "PUT", body: JSON.stringify(input) }),
+  deleteModelCredential: (token: string) => request<void>("/me/model", token, { method: "DELETE" }),
   invite: (token: string, projectId: string, githubLogin: string) =>
     request<{ id: string }>(`/projects/${projectId}/invitations`, token, { method: "POST", body: JSON.stringify({ githubLogin }) }),
   revokeInvitation: (token: string, projectId: string, invitationId: string) =>

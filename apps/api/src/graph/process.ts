@@ -98,24 +98,37 @@ async function applyPendingFacts(pool: Pool, projectId: string): Promise<FactsRe
   }
 }
 
+/** `owner-key` interprets only projects whose owner has saved a model key. `all` interprets every due project. */
+export type InterpretationSchedule = "none" | "all" | "owner-key";
+
 /** Projects with facts to apply, or evidence whose batching window has closed. */
 export async function dueProjects(
   pool: Pool,
-  options: { includeInterpretation: boolean; now?: () => Date; quietMs?: number; maxWaitMs?: number },
+  options: { interpretation: InterpretationSchedule; now?: () => Date; quietMs?: number; maxWaitMs?: number },
 ): Promise<string[]> {
   const at = now(options);
   const result = await pool.query<{ project_id: string }>(
     `select project_id from normalized_events where facts_state = 'pending' group by project_id
      union
-     select project_id from evidence
-     where $1::boolean
-       and (interpretation_state = 'pending' or (interpretation_state = 'failed' and retry_at <= $2))
-     group by project_id
-     having max(created_at) <= $2::timestamptz - make_interval(secs => $3)
-         or min(created_at) <= $2::timestamptz - make_interval(secs => $4)
-         or bool_or(interpretation_state = 'failed')`,
+     select e.project_id from evidence e
+     where $1::text <> 'none'
+       and (
+         $1::text = 'all'
+         or exists (
+           select 1
+           from projects p
+           join memberships m on m.workspace_id = p.workspace_id and m.role = 'owner'
+           join user_model_credentials c on c.user_id = m.user_id
+           where p.id = e.project_id
+         )
+       )
+       and (e.interpretation_state = 'pending' or (e.interpretation_state = 'failed' and e.retry_at <= $2))
+     group by e.project_id
+     having max(e.created_at) <= $2::timestamptz - make_interval(secs => $3)
+         or min(e.created_at) <= $2::timestamptz - make_interval(secs => $4)
+         or bool_or(e.interpretation_state = 'failed')`,
     [
-      options.includeInterpretation,
+      options.interpretation,
       at.toISOString(),
       (options.quietMs ?? processingDefaults.quietMs) / 1000,
       (options.maxWaitMs ?? processingDefaults.maxWaitMs) / 1000,
