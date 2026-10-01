@@ -80,8 +80,8 @@ describe("local helper page", () => {
 
     const visit = await fetch(helper.base, { headers: { "Sec-Fetch-Dest": "document" } });
     const html = await visit.text();
-    expect(html).toContain(`Paired to project ${projectId}`);
-    expect(html).toContain(`codex: ${join(root, "codex")}`);
+    expect(html).toContain(`Paired to project <code>${projectId}</code>`);
+    expect(html).toContain(join(root, "codex"));
     const cookie = visit.headers.get("set-cookie")?.split(";")[0] ?? "";
     expect(cookie.startsWith("apm_local=")).toBe(true);
 

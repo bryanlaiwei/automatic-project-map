@@ -5,7 +5,8 @@ import { createServer, type IncomingMessage, type Server, type ServerResponse } 
 import { realpathSync } from "node:fs";
 import type { AddressInfo } from "node:net";
 import type { LogRoots } from "./collection-pass.js";
-import { describeLogRoots, type CollectorStatus } from "./collector-loop.js";
+import type { CollectorStatus } from "./collector-loop.js";
+import { renderHelperPage } from "./helper-page.js";
 import { LocalDb } from "./local-db.js";
 
 const defaultPort = 47321;
@@ -52,7 +53,7 @@ export async function startLocalServer(options: LocalServerOptions): Promise<Ser
           headers["Set-Cookie"] = sessionCookie(secret);
         }
         res.writeHead(200, headers);
-        res.end(page(options.db, options.logRoots ?? {}, options.status?.() ?? null));
+        res.end(renderHelperPage(options.db, options.logRoots ?? {}, options.status?.() ?? null));
         return;
       }
       if (req.method === "POST" && url.pathname === "/pair") {
@@ -161,92 +162,6 @@ function isPairPayload(value: unknown): value is { token: string; deviceId: stri
     typeof record.projectId === "string" &&
     typeof record.trackingStartedAt === "string"
   );
-}
-
-function page(db: LocalDb, logRoots: LogRoots, status: CollectorStatus | null): string {
-  const pairing = db.getPairing();
-  const folders = db.folders();
-  const folderItems = folders
-    .map(
-      (folder) =>
-        `<li>${escapeHtml(folder.canonicalPath)} ${folder.enabled ? "" : "(paused)"} <form method="post" action="/folders/${encodeURIComponent(folder.id)}/disable"><button type="submit">Remove</button></form></li>`,
-    )
-    .join("");
-  const pairForm = `<form id="pair"><label>Pairing code <input name="code" required></label><label>API URL <input name="apiUrl" value="${escapeHtml(pairing?.apiUrl ?? "http://127.0.0.1:4000")}"></label><button type="submit">Pair</button></form>`;
-  const pairingSection = !pairing
-    ? `<p>Not paired yet. Use "Connect local helper" in the web app, or paste a pairing code here.</p>${pairForm}`
-    : status?.needsPairing
-      ? `<p>The server no longer accepts this helper's token. Connect it again from the web app, or paste a new code.</p>${pairForm}`
-      : `<p>Paired to project ${escapeHtml(pairing.projectId)}. Tracking started ${escapeHtml(pairing.trackingStartedAt)}.</p>`;
-  const roots = describeLogRoots(logRoots)
-    .map((line) => `<li>${escapeHtml(line)}</li>`)
-    .join("");
-  return `<!doctype html>
-<html>
-<head><meta charset="utf-8"><title>Project map helper</title></head>
-<body>
-<h1>Local helper</h1>
-${pairingSection}
-<h2>Folders</h2>
-<p>Only sessions whose working folder is inside one of these folders are uploaded.</p>
-<ul>${folderItems}</ul>
-<form id="folder"><label>Folder path <input name="path" required></label><button type="submit">Add folder</button></form>
-<h2>Collection</h2>
-<p>Agent logs watched:</p>
-<ul>${roots}</ul>
-${statusSection(status)}
-<p id="message"></p>
-<script>
-document.getElementById("scan")?.addEventListener("click", async () => {
-  const response = await fetch("/scan", { method: "POST" });
-  const body = await response.json().catch(() => ({}));
-  document.getElementById("message").textContent = response.ok ? "Scan finished." : (body.error || "Scan failed.");
-  if (response.ok) location.reload();
-});
-document.getElementById("pair")?.addEventListener("submit", async (event) => {
-  event.preventDefault();
-  const data = new FormData(event.target);
-  const response = await fetch("/pair", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ code: data.get("code"), apiUrl: data.get("apiUrl") }) });
-  const body = await response.json().catch(() => ({}));
-  document.getElementById("message").textContent = response.ok ? "Paired." : (body.error || "Pairing failed.");
-  if (response.ok) location.reload();
-});
-document.getElementById("folder")?.addEventListener("submit", async (event) => {
-  event.preventDefault();
-  const data = new FormData(event.target);
-  const response = await fetch("/folders", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ path: data.get("path") }) });
-  const body = await response.json().catch(() => ({}));
-  document.getElementById("message").textContent = response.ok ? "Folder added." : (body.error || "Could not add that folder.");
-  if (response.ok) location.reload();
-});
-</script>
-</body>
-</html>`;
-}
-
-function statusSection(status: CollectorStatus | null): string {
-  if (!status) {
-    return "";
-  }
-  const paused = status.paused
-    .map((item) => `<li>${escapeHtml(item.provider)} ${escapeHtml(item.sessionId)}: ${escapeHtml(item.reason ?? "paused")}</li>`)
-    .join("");
-  const lines = [
-    `Last scan: ${status.lastScanAt ?? "not yet"}`,
-    `Last upload: ${status.lastUploadAt ?? "not yet"}`,
-    `Waiting to upload: ${status.queued}`,
-    `Uploaded since start: ${status.uploaded}`,
-    `Dropped since start: ${status.dropped}`,
-    ...(status.nextUploadAt ? [`Next upload attempt: ${status.nextUploadAt}`] : []),
-    ...(status.lastError ? [`Last problem: ${status.lastError}`] : []),
-  ];
-  return `<ul>${lines.map((line) => `<li>${escapeHtml(line)}</li>`).join("")}</ul>
-${paused === "" ? "" : `<p>Paused sessions (their log file was replaced or shortened):</p><ul>${paused}</ul>`}
-<button id="scan" type="button">Scan now</button>`;
-}
-
-function escapeHtml(value: string): string {
-  return value.replace(/[&<>"]/g, (char) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;" })[char] ?? char);
 }
 
 function isLoopback(req: IncomingMessage): boolean {
