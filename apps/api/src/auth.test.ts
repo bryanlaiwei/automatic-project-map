@@ -1,6 +1,6 @@
-import { SignJWT } from "jose";
+import { SignJWT, exportJWK, generateKeyPair, type CryptoKey } from "jose";
 import type { Pool } from "pg";
-import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { verifySupabaseUser } from "./auth.js";
 
 const secretText = "test-secret-with-at-least-32-characters";
@@ -104,6 +104,74 @@ describe("Supabase user check", () => {
     delete process.env.SUPABASE_JWT_SECRET;
     const { pool, queries } = identityPool({ user_name: "real-me" });
     await expect(verifySupabaseUser(await accessToken(), pool)).resolves.toBeNull();
+    expect(queries).toEqual([]);
+  });
+});
+
+describe("Supabase user check with signing keys", () => {
+  const saved = { url: process.env.SUPABASE_URL, secret: process.env.SUPABASE_JWT_SECRET };
+  const kid = "test-signing-key";
+  let signingKey: CryptoKey;
+  let jwksRequests: string[];
+
+  async function signedToken(input?: { key?: CryptoKey; role?: string }): Promise<string> {
+    return new SignJWT({ role: input?.role ?? "authenticated" })
+      .setProtectedHeader({ alg: "ES256", kid })
+      .setSubject(userId)
+      .setIssuer("http://supabase.test/auth/v1")
+      .setAudience("authenticated")
+      .setIssuedAt()
+      .setExpirationTime("1h")
+      .sign(input?.key ?? signingKey);
+  }
+
+  let jwk: Record<string, unknown>;
+
+  // The API caches the key set per Supabase URL, so every test in this block shares one key pair.
+  beforeAll(async () => {
+    const pair = await generateKeyPair("ES256", { extractable: true });
+    signingKey = pair.privateKey;
+    jwk = { ...(await exportJWK(pair.publicKey)), kid, alg: "ES256", use: "sig" };
+  });
+
+  beforeEach(() => {
+    process.env.SUPABASE_URL = "http://supabase.test";
+    delete process.env.SUPABASE_JWT_SECRET;
+    jwksRequests = [];
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async (url: string | URL) => {
+        jwksRequests.push(String(url));
+        return new Response(JSON.stringify({ keys: [jwk] }), { headers: { "content-type": "application/json" } });
+      }),
+    );
+  });
+
+  afterEach(() => {
+    vi.unstubAllGlobals();
+    for (const [name, value] of [
+      ["SUPABASE_URL", saved.url],
+      ["SUPABASE_JWT_SECRET", saved.secret],
+    ] as const) {
+      if (value === undefined) {
+        delete process.env[name];
+      } else {
+        process.env[name] = value;
+      }
+    }
+  });
+
+  it("accepts a token signed with the project's published signing key, without the shared secret", async () => {
+    const { pool } = identityPool({ user_name: "real-me", provider_id: "583231" });
+    await expect(verifySupabaseUser(await signedToken(), pool)).resolves.toMatchObject({ id: userId, githubLogin: "real-me" });
+    expect(jwksRequests).toEqual(["http://supabase.test/auth/v1/.well-known/jwks.json"]);
+  });
+
+  it("rejects a token signed with some other key or for a non-user role", async () => {
+    const { pool, queries } = identityPool({ user_name: "real-me" });
+    const other = await generateKeyPair("ES256");
+    await expect(verifySupabaseUser(await signedToken({ key: other.privateKey }), pool)).resolves.toBeNull();
+    await expect(verifySupabaseUser(await signedToken({ role: "service_role" }), pool)).resolves.toBeNull();
     expect(queries).toEqual([]);
   });
 });
