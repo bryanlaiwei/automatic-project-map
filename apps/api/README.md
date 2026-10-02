@@ -18,7 +18,9 @@ flowchart TD
 
   hook["GitHub webhook"] --> sig["Check the signature"]
   sig --> row["Insert a webhook row as queued"]
-  row --> finish["Write normalized events and mark the row processed or ignored"]
+  row --> ack["Reply 202"]
+  ack --> job["Queue a pg-boss job"]
+  job --> finish["Worker calls GitHub and writes normalized events"]
 
   worker["Worker calls processProject"] --> facts["Write pull requests, reviews, workflow runs, and evidence"]
   facts --> model{"A model key is available?"}
@@ -35,6 +37,7 @@ flowchart TD
 - `src/env.ts` reads the repo’s `.env` file into the process environment.
 - `src/db.ts` opens one shared Postgres connection pool.
 - `src/auth.ts` checks a Supabase access token locally with the project's JWT secret and returns the signed-in user.
+- `src/delivery-jobs.ts` queues one pg-boss job per saved webhook delivery.
 - `src/store.ts` stores projects, inserts events, and finishes queued webhook deliveries.
 - `src/ingest-events.ts` checks an uploaded batch and stores the session events that pass.
 - `src/helper-tokens.ts` creates a pairing code, exchanges it for a device token, and revokes that token.

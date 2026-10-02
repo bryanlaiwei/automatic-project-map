@@ -16,7 +16,7 @@ const userId = "77777777-7777-4777-8777-777777777777";
 const secret = "test-webhook-secret";
 const repoId = 88000031;
 const workspaceName = "acme/background";
-const deliveryIds = ["bg-pr-opened", "bg-run-started", "bg-stale", "bg-fresh", "bg-broken", "bg-throws-inline"];
+const deliveryIds = ["bg-pr-opened", "bg-run-started", "bg-stale", "bg-fresh", "bg-broken", "bg-throws-inline", "bg-accepted-only"];
 
 function sign(body: string): string {
   return `sha256=${createHmac("sha256", secret).update(body).digest("hex")}`;
@@ -44,6 +44,7 @@ describe("background GitHub work", () => {
   const pulls = new Map<number, unknown>();
   const runs = new Map<number, { run: unknown; jobs: unknown }>();
   const failing = new Set<number>();
+  const queuedForWorker: string[] = [];
   const github = {
     async enrichPullRequest(_owner: string, _name: string, number: number) {
       if (failing.has(number)) {
@@ -62,7 +63,12 @@ describe("background GitHub work", () => {
     webhookSecret: secret,
     verifyUser: async (token: string) => (token === "background-user" ? { id: userId } : null),
     verifyRepositoryAccess: async (): Promise<RepositoryAccess> => ({ status: "accessible" }),
-    github,
+    enqueueDeliveryProcessing: async (deliveryId: string) => {
+      if (deliveryId === "bg-accepted-only") {
+        await new Promise((resolve) => setTimeout(resolve, 2_000));
+      }
+      queuedForWorker.push(deliveryId);
+    },
   }).listen(0, "127.0.0.1");
 
   beforeAll(async () => {
@@ -114,6 +120,7 @@ describe("background GitHub work", () => {
     const opened = pullRequest({ id: 3101, number: 11, state: "open", merged: false, updatedAt: "2026-09-25T10:00:00.000Z" });
     pulls.set(11, opened);
     expect((await postWebhook("pull_request", "bg-pr-opened", { repository: { id: repoId }, pull_request: opened })).status).toBe(202);
+    await processQueuedDeliveries(pool, github, { deliveryIds: ["bg-pr-opened"] });
 
     pulls.set(11, pullRequest({ id: 3101, number: 11, state: "closed", merged: true, updatedAt: "2026-09-25T11:00:00.000Z" }));
     const first = await refreshObservedGithub(pool, github, { projectId, writeEvents: (events) => insertEvents(pool, events) });
@@ -153,6 +160,7 @@ describe("background GitHub work", () => {
     };
     runs.set(5101, { run: started, jobs: { jobs: [] } });
     expect((await postWebhook("workflow_run", "bg-run-started", { repository: { id: repoId }, workflow_run: started })).status).toBe(202);
+    await processQueuedDeliveries(pool, github, { deliveryIds: ["bg-run-started"] });
 
     const finishedAt = new Date().toISOString();
     runs.set(5101, {
@@ -215,17 +223,54 @@ describe("background GitHub work", () => {
     expect((await statuses())["bg-broken"]).toBe(`failed:${deliveryAttemptLimit}`);
   });
 
-  it("a webhook whose processing fails is still accepted and left for the sweep", async () => {
+  it("answers 202 while the delivery is still queued, then hands it to the worker", async () => {
+    const before = queuedForWorker.length;
+    const payload = {
+      repository: { id: repoId },
+      pull_request: pullRequest({ id: 3299, number: 97, state: "open", merged: false, updatedAt: "2026-09-25T12:40:00.000Z" }),
+    };
+    const started = Date.now();
+    const response = await postWebhook("pull_request", "bg-accepted-only", payload);
+    expect(Date.now() - started).toBeLessThan(1_000);
+    expect(response.status).toBe(202);
+    expect(await response.json()).toEqual({ accepted: true, duplicate: false });
+    const row = await pool.query<{ status: string; attempts: number; note: string | null }>(
+      "select status, attempts, note from webhook_deliveries where delivery_id = 'bg-accepted-only'",
+    );
+    expect(row.rows[0]).toEqual({ status: "queued", attempts: 0, note: null });
+    expect(queuedForWorker.slice(before)).toEqual([]);
+
+    const duplicate = await postWebhook("pull_request", "bg-accepted-only", payload);
+    expect(duplicate.status).toBe(202);
+    expect(await duplicate.json()).toEqual({ accepted: true, duplicate: true });
+
+    const deadline = Date.now() + 5_000;
+    while (queuedForWorker.length === before) {
+      if (Date.now() > deadline) {
+        throw new Error("Timed out waiting for the webhook to hand the delivery to the worker.");
+      }
+      await new Promise((resolve) => setTimeout(resolve, 50));
+    }
+    expect(queuedForWorker.slice(before)).toEqual(["bg-accepted-only"]);
+  });
+
+  it("leaves a failed delivery queued for the sweep", async () => {
     failing.add(98);
     const response = await postWebhook("pull_request", "bg-throws-inline", {
       repository: { id: repoId },
       pull_request: pullRequest({ id: 3298, number: 98, state: "open", merged: false, updatedAt: "2026-09-25T12:30:00.000Z" }),
     });
     expect(response.status).toBe(202);
-    const row = await pool.query<{ status: string; note: string }>(
+    const accepted = await pool.query<{ status: string; note: string | null }>(
       "select status, note from webhook_deliveries where delivery_id = 'bg-throws-inline'",
     );
-    expect(row.rows[0]).toMatchObject({ status: "queued", note: "fetch failed" });
+    expect(accepted.rows[0]).toEqual({ status: "queued", note: null });
+
+    await processQueuedDeliveries(pool, github, { deliveryIds: ["bg-throws-inline"] });
+    const failed = await pool.query<{ status: string; note: string }>(
+      "select status, note from webhook_deliveries where delivery_id = 'bg-throws-inline'",
+    );
+    expect(failed.rows[0]).toMatchObject({ status: "queued", note: "fetch failed" });
 
     failing.delete(98);
     await pool.query("update webhook_deliveries set next_attempt_at = now() where delivery_id = 'bg-throws-inline'");

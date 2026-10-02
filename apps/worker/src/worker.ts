@@ -1,5 +1,6 @@
 import PgBoss from "pg-boss";
 import type { Pool } from "pg";
+import { ensureProcessDeliveryQueue, processDeliveryQueue, type ProcessDeliveryJob } from "@apm/api/delivery-jobs";
 import { dueProjects, processProject, type InterpretationSchedule, type Interpreter, type ProcessResult } from "@apm/api/graph/process";
 import { insertEvents, processQueuedDeliveries } from "@apm/api/store";
 import type { GithubLookup } from "@apm/github-collector/enrich";
@@ -16,6 +17,11 @@ export type RunningWorker = {
   /** Finds projects with work due and queues them; the worker also does this on a timer. */
   dispatch(): Promise<number>;
   stop(): Promise<void>;
+};
+
+export type DeliveryProcessing = {
+  pool: Pool;
+  github: GithubLookup;
 };
 
 export type ProjectProcessing = {
@@ -59,6 +65,8 @@ export function backgroundJobs(input: { pool: Pool; github: GithubLookup }): Wor
 export async function startWorker(input: {
   connectionString: string;
   jobs: WorkerJob[];
+  /** Runs each webhook the API just saved. The minute sweep still covers anything left queued. */
+  deliveries?: DeliveryProcessing;
   processing?: ProjectProcessing;
   log?: (line: string) => void;
 }): Promise<RunningWorker> {
@@ -78,6 +86,19 @@ export async function startWorker(input: {
   }
   for (const job of input.jobs) {
     await boss.send(job.name, {}, { singletonKey: job.name });
+  }
+
+  const deliveries = input.deliveries;
+  if (deliveries) {
+    await ensureProcessDeliveryQueue(boss);
+    await boss.work<ProcessDeliveryJob>(processDeliveryQueue, { pollingIntervalSeconds: 1 }, async (jobs) => {
+      for (const job of jobs) {
+        const processed = await processQueuedDeliveries(deliveries.pool, deliveries.github, {
+          deliveryIds: [job.data.deliveryId],
+        });
+        log(`${processDeliveryQueue} ${job.data.deliveryId}: processed ${processed}`);
+      }
+    });
   }
 
   const processing = input.processing;

@@ -1,6 +1,7 @@
+import { startDeliveryPublisher } from "@apm/api/delivery-jobs";
 import { getPool } from "@apm/api/db";
 import { loadEnvFile } from "@apm/api/env";
-import { connectRepository, insertEvents } from "@apm/api/store";
+import { connectRepository, enqueueDelivery, insertEvents } from "@apm/api/store";
 import { SCHEMA_VERSION } from "@apm/shared";
 import { describe, expect, it } from "vitest";
 import { startWorker, type WorkerJob } from "./worker.js";
@@ -48,6 +49,58 @@ describe("worker", () => {
         await second.boss.unschedule(job.name);
       }
       await second.stop();
+    }
+  }, 60_000);
+
+  it("processes a webhook delivery published on the shared queue", async () => {
+    const connectionString = process.env.DATABASE_URL ?? "";
+    const pool = getPool();
+    const deliveryId = `worker-queued-delivery-${Date.now()}`;
+    await pool.query("delete from webhook_deliveries where delivery_id = $1", [deliveryId]);
+    await enqueueDelivery(pool, { deliveryId, eventName: "ping", repoId: null, payload: {} });
+    const worker = await startWorker({
+      connectionString,
+      jobs: [],
+      deliveries: {
+        pool,
+        github: {
+          async enrichPullRequest() {
+            return null;
+          },
+          async enrichWorkflowRun() {
+            return null;
+          },
+        },
+      },
+      log: () => undefined,
+    });
+    try {
+      const publisher = await startDeliveryPublisher(connectionString);
+      try {
+        await publisher.enqueue(deliveryId);
+        const deadline = Date.now() + 20_000;
+        let status = "";
+        let note = "";
+        while (status !== "ignored") {
+          if (Date.now() > deadline) {
+            throw new Error(`Timed out waiting for delivery processing (status ${status || "missing"}).`);
+          }
+          await new Promise((resolve) => setTimeout(resolve, 100));
+          const row = await pool.query<{ status: string; note: string | null }>(
+            "select status, note from webhook_deliveries where delivery_id = $1",
+            [deliveryId],
+          );
+          status = row.rows[0]?.status ?? "";
+          note = row.rows[0]?.note ?? "";
+        }
+        expect(status).toBe("ignored");
+        expect(note).toBe("missing_repository");
+      } finally {
+        await publisher.stop();
+      }
+    } finally {
+      await worker.stop();
+      await pool.query("delete from webhook_deliveries where delivery_id = $1", [deliveryId]);
     }
   }, 60_000);
 

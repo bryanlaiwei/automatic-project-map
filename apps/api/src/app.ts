@@ -16,9 +16,7 @@ import {
   enqueueDelivery,
   listEvents,
   listProjects,
-  processQueuedDeliveries,
   userCanAccessProject,
-  type GithubLookup,
 } from "./store.js";
 
 const connectBody = z.object({
@@ -32,7 +30,11 @@ export type AppDeps = {
   webhookSecret: string;
   verifyUser: (token: string) => Promise<AuthUser | null>;
   verifyRepositoryAccess: RepositoryAccessCheck;
-  github?: GithubLookup;
+  /**
+   * Inserts one pg-boss job for a saved delivery. The worker calls GitHub; this request does not.
+   * When this is omitted, the minute sweep still finishes the row.
+   */
+  enqueueDeliveryProcessing?: (deliveryId: string) => Promise<void>;
   lookupGithubAccount?: GithubAccountLookup;
   /** Checks a model key with the supplier. Tests pass a stub. */
   modelKeyCheck?: ModelKeyCheck;
@@ -161,8 +163,20 @@ export function createApp(deps: AppDeps) {
       res.status(202).json({ accepted: true, duplicate: true });
       return;
     }
-    await processQueuedDeliveries(deps.pool, deps.github, { deliveryIds: [deliveryId] });
+
+    // GitHub gives up after 10 seconds, and each enrichment call can take 15. The row is already saved,
+    // so acknowledge before the worker calls GitHub. A failed handoff stays queued for the minute sweep.
     res.status(202).json({ accepted: true, duplicate: false });
+    if (!deps.enqueueDeliveryProcessing) {
+      return;
+    }
+    void deps.enqueueDeliveryProcessing(deliveryId).catch((error: unknown) => {
+      console.error(
+        `Webhook delivery ${deliveryId} was saved but not handed to the worker: ${
+          error instanceof Error ? error.message : String(error)
+        }`,
+      );
+    });
   });
 
   app.use(express.json({ limit: JSON_BODY_LIMIT_BYTES }));
