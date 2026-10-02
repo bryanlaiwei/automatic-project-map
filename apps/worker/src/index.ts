@@ -22,13 +22,14 @@ const fallback = openAiInterpreterFromEnv();
 const worker = await startWorker({
   connectionString,
   jobs: backgroundJobs({ pool, github }),
+  deliveries: { pool, github },
   processing: {
     pool,
     resolveInterpreter: (projectId) => resolveProjectInterpreter(pool, projectId),
     interpretation: fallback ? "all" : "owner-key",
   },
 });
-console.log("worker running: stale deliveries every minute, GitHub refresh every 5 minutes, project processing every 5 seconds");
+console.log("worker running: webhook deliveries as they arrive, stale deliveries every minute, GitHub refresh every 5 minutes, project processing every 5 seconds");
 console.log(
   fallback
     ? `map interpretation uses each project owner's saved model key, or OpenAI model ${fallback.model} when an owner has not saved one`

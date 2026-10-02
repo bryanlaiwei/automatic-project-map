@@ -8,6 +8,7 @@ loadEnvFile();
 
 const { createApp } = await import("./app.js");
 const { getPool } = await import("./db.js");
+const { processQueuedDeliveries } = await import("./store.js");
 
 const userId = "44444444-4444-4444-8444-444444444444";
 const otherUserId = "55555555-5555-4555-8555-555555555555";
@@ -121,6 +122,7 @@ describe("repository connection and webhooks", () => {
     const second = await fetch(`${baseUrl}/github/webhook`, { method: "POST", headers, body: payload });
     expect(first.status).toBe(202);
     expect(second.status).toBe(202);
+    await processQueuedDeliveries(pool, undefined, { deliveryIds: ["delivery-day1-pr"] });
     const events = await listProjectEvents();
     expect(events.filter((event) => event.source === "github")).toHaveLength(1);
   });

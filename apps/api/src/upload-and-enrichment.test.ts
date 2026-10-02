@@ -11,6 +11,7 @@ loadEnvFile();
 
 const { createApp } = await import("./app.js");
 const { getPool } = await import("./db.js");
+const { processQueuedDeliveries } = await import("./store.js");
 
 const userId = "66666666-6666-4666-8666-666666666666";
 const secret = "test-webhook-secret";
@@ -26,21 +27,21 @@ describe("session upload and GitHub enrichment", () => {
   let projectId = "";
   const pulls = new Map<number, unknown>();
   const runs = new Map<number, { run: unknown; jobs: unknown }>();
+  const github = {
+    async enrichPullRequest(_owner: string, _name: string, number: number) {
+      const body = pulls.get(number);
+      return body ? snapshotFromPullRequest(body, [], []) : null;
+    },
+    async enrichWorkflowRun(_owner: string, _name: string, runId: number) {
+      const body = runs.get(runId);
+      return body ? snapshotFromWorkflow(body.run, body.jobs) : null;
+    },
+  };
   const deps = {
     pool,
     webhookSecret: secret,
     verifyUser: async (token: string) => (token === "day2-user" ? { id: userId } : null),
     verifyRepositoryAccess: async (): Promise<RepositoryAccess> => ({ status: "accessible" }),
-    github: {
-      async enrichPullRequest(_owner: string, _name: string, number: number) {
-        const body = pulls.get(number);
-        return body ? snapshotFromPullRequest(body, [], []) : null;
-      },
-      async enrichWorkflowRun(_owner: string, _name: string, runId: number) {
-        const body = runs.get(runId);
-        return body ? snapshotFromWorkflow(body.run, body.jobs) : null;
-      },
-    },
   };
   const server: Server = createApp(deps).listen(0, "127.0.0.1");
 
@@ -209,6 +210,7 @@ describe("session upload and GitHub enrichment", () => {
       body: payload,
     });
     expect(response.status).toBe(202);
+    await processQueuedDeliveries(pool, github, { deliveryIds: ["day2-pr-current"] });
     const delivery = await pool.query("select status, note from webhook_deliveries where delivery_id = $1", ["day2-pr-current"]);
     expect(delivery.rows[0]).toMatchObject({ status: "processed" });
     const current = await pool.query<{ details: { title: string; headSha: string; draft: boolean } }>(
@@ -248,6 +250,7 @@ describe("session upload and GitHub enrichment", () => {
       body: late,
     });
     expect(lateResponse.status).toBe(202);
+    await processQueuedDeliveries(pool, github, { deliveryIds: ["day2-pr-late"] });
     const kept = await pool.query<{ details: { merged: boolean; state: string } }>(
       "select details from normalized_events where event_id = $1",
       ["github:day2-pr-late"],
@@ -297,6 +300,7 @@ describe("session upload and GitHub enrichment", () => {
       body: payload,
     });
     expect(response.status).toBe(202);
+    await processQueuedDeliveries(pool, github, { deliveryIds: ["day2-run"] });
     const stored = await pool.query<{
       details: { status: string; conclusion: string; attempt: number; pullRequestNumbers: number[]; jobs: Array<{ name: string }> };
     }>("select details from normalized_events where event_id = $1", ["github:day2-run"]);
