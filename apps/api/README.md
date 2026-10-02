@@ -34,7 +34,7 @@ flowchart TD
 - `src/app.ts` is the HTTP server: sign-in, connect a repository, pair a helper, upload events, receive webhooks, and mount the map and settings routes.
 - `src/env.ts` reads the repo’s `.env` file into the process environment.
 - `src/db.ts` opens one shared Postgres connection pool.
-- `src/auth.ts` checks a Supabase access token and returns the signed-in user.
+- `src/auth.ts` checks a Supabase access token locally with the project's JWT secret and returns the signed-in user.
 - `src/store.ts` stores projects, inserts events, and finishes queued webhook deliveries.
 - `src/ingest-events.ts` checks an uploaded batch and stores the session events that pass.
 - `src/helper-tokens.ts` creates a pairing code, exchanges it for a device token, and revokes that token.
