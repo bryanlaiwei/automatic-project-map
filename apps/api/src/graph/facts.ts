@@ -186,21 +186,17 @@ async function addSessionEvidence(
   event: NormalizedEvent,
   details: Details<"session.content_added">,
 ): Promise<void> {
-  const known = await context.client.query<{ key: string }>(
-    `select distinct unnest(record_keys) as key
-     from evidence
-     where project_id = $1 and source = $2 and session_id = $3`,
-    [context.projectId, event.source, details.sessionId],
+  const keyed = details.messages.map((message) => ({ message, key: recordKey(message) }));
+  // Only keys this statement inserted come back, so earlier and repeated messages drop out.
+  const inserted = await context.client.query<{ record_key: string }>(
+    `insert into session_record_keys (project_id, source, session_id, record_key)
+     select $1::uuid, $2::text, $3::text, unnest($4::text[])
+     on conflict do nothing
+     returning record_key`,
+    [context.projectId, event.source, details.sessionId, keyed.map((item) => item.key)],
   );
-  const seen = new Set(known.rows.map((row) => row.key));
-  const fresh = details.messages.filter((message) => {
-    const key = recordKey(message);
-    if (seen.has(key)) {
-      return false;
-    }
-    seen.add(key);
-    return true;
-  });
+  const freshKeys = new Set(inserted.rows.map((row) => row.record_key));
+  const fresh = keyed.filter((item) => freshKeys.delete(item.key)).map((item) => item.message);
   for (const [part, excerpt] of sessionExcerpts(fresh).entries()) {
     const inserted = await context.client.query(
       `insert into evidence
