@@ -1,4 +1,4 @@
-import { ChevronDown, CircleAlert, LoaderCircle, LogOut, Mail, Plus, Settings, WifiOff } from "lucide-react";
+import { Check, ChevronDown, CircleAlert, ExternalLink, LoaderCircle, LogOut, Mail, Plus, Settings, WifiOff } from "lucide-react";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { ApiError, api, errorMessage, type Graph, type Me, type Project } from "../api";
 import { timeAgo } from "../format";
@@ -299,32 +299,36 @@ export function Workspace({
         <LogoMark className="size-7" />
         <span className="hidden text-sm font-semibold text-zinc-900 sm:inline">Project Map</span>
         <span className="text-zinc-300">/</span>
-        {projects.length > 1 ? (
-          <Menu
-            trigger={(toggle) => (
-              <button type="button" onClick={toggle} className="flex items-center gap-1.5 rounded-lg px-2 py-1 text-sm font-medium text-zinc-800 hover:bg-zinc-100">
-                <GithubMark className="size-4 text-zinc-500" />
-                {project.owner}/{project.name}
-                <ChevronDown className="size-3.5 text-zinc-400" />
-              </button>
-            )}
-            items={projects.map((entry) => ({
+        <Menu
+          align="left"
+          wide
+          trigger={(toggle) => (
+            <button
+              type="button"
+              onClick={toggle}
+              aria-label="Switch project"
+              className="flex items-center gap-1.5 rounded-lg px-2 py-1 text-sm font-medium text-zinc-800 hover:bg-zinc-100"
+            >
+              <GithubMark className="size-4 text-zinc-500" />
+              {project.owner}/{project.name}
+              <ChevronDown className="size-3.5 text-zinc-400" />
+            </button>
+          )}
+          items={[
+            ...projects.map((entry) => ({
               label: `${entry.owner}/${entry.name}`,
+              icon: <Check className={cx("size-4", entry.id === project.id ? "text-indigo-600" : "invisible")} />,
               onSelect: () => onSwitchProject(entry.id),
-              disabled: entry.id === project.id,
-            }))}
-          />
-        ) : (
-          <a
-            href={`https://github.com/${project.owner}/${project.name}`}
-            target="_blank"
-            rel="noreferrer"
-            className="flex items-center gap-1.5 rounded-lg px-2 py-1 text-sm font-medium text-zinc-800 hover:bg-zinc-100"
-          >
-            <GithubMark className="size-4 text-zinc-500" />
-            {project.owner}/{project.name}
-          </a>
-        )}
+            })),
+            {
+              label: "Open on GitHub",
+              icon: <ExternalLink className="size-4 text-zinc-500" />,
+              onSelect: () => window.open(`https://github.com/${project.owner}/${project.name}`, "_blank", "noopener,noreferrer"),
+              divider: true,
+            },
+            { label: "New project", icon: <Plus className="size-4 text-zinc-500" />, onSelect: onConnectRepository },
+          ]}
+        />
 
         <div className="ml-auto flex items-center gap-2">
           {offline ? (
@@ -386,7 +390,7 @@ export function Workspace({
               </button>
             )}
             items={[
-              { label: "Connect another repository", icon: <Plus className="size-4" />, onSelect: onConnectRepository },
+              { label: "New project", icon: <Plus className="size-4" />, onSelect: onConnectRepository },
               { label: `Sign out${me.githubLogin ? ` @${me.githubLogin}` : ""}`, icon: <LogOut className="size-4" />, onSelect: onSignOut },
             ]}
           />
