@@ -353,7 +353,28 @@ export function EditableTitle({
   );
 }
 
-export function Menu({ trigger, items }: { trigger: (open: () => void) => ReactNode; items: Array<{ label: string; icon?: ReactNode; onSelect: () => void; danger?: boolean; disabled?: boolean }> }) {
+export type MenuItem = {
+  label: string;
+  icon?: ReactNode;
+  onSelect: () => void;
+  danger?: boolean;
+  disabled?: boolean;
+  /** Draws a line above the item to start a new group. */
+  divider?: boolean;
+};
+
+export function Menu({
+  trigger,
+  items,
+  align = "right",
+  wide = false,
+}: {
+  trigger: (open: () => void) => ReactNode;
+  items: MenuItem[];
+  align?: "left" | "right";
+  /** For long labels such as owner/repository names. */
+  wide?: boolean;
+}) {
   const [open, setOpen] = useState(false);
   const root = useRef<HTMLDivElement>(null);
   useEffect(() => {
@@ -381,25 +402,35 @@ export function Menu({ trigger, items }: { trigger: (open: () => void) => ReactN
     <div ref={root} className="relative">
       {trigger(() => setOpen((value) => !value))}
       {open ? (
-        <div role="menu" className="absolute right-0 z-30 mt-1 w-56 overflow-hidden rounded-xl bg-white p-1 shadow-lg ring-1 ring-zinc-200 animate-in">
-          {items.map((item) => (
-            <button
-              key={item.label}
-              type="button"
-              role="menuitem"
-              disabled={item.disabled}
-              onClick={() => {
-                setOpen(false);
-                item.onSelect();
-              }}
-              className={cx(
-                "flex w-full items-center gap-2 rounded-lg px-2.5 py-2 text-left text-sm disabled:opacity-40",
-                item.danger ? "text-rose-600 hover:bg-rose-50" : "text-zinc-700 hover:bg-zinc-100",
-              )}
-            >
-              {item.icon}
-              {item.label}
-            </button>
+        <div
+          role="menu"
+          className={cx(
+            "absolute z-30 mt-1 overflow-hidden rounded-xl bg-white p-1 shadow-lg ring-1 ring-zinc-200 animate-in",
+            wide ? "w-80" : "w-56",
+            align === "left" ? "left-0" : "right-0",
+          )}
+        >
+          {items.map((item, index) => (
+            <div key={`${index}:${item.label}`} className={item.divider && index > 0 ? "mt-1 border-t border-zinc-100 pt-1" : undefined}>
+              <button
+                type="button"
+                role="menuitem"
+                disabled={item.disabled}
+                onClick={() => {
+                  setOpen(false);
+                  item.onSelect();
+                }}
+                className={cx(
+                  "flex w-full items-center gap-2 rounded-lg px-2.5 py-2 text-left text-sm disabled:opacity-40",
+                  item.danger ? "text-rose-600 hover:bg-rose-50" : "text-zinc-700 hover:bg-zinc-100",
+                )}
+              >
+                {item.icon}
+                <span className="min-w-0 flex-1 truncate" title={item.label}>
+                  {item.label}
+                </span>
+              </button>
+            </div>
           ))}
         </div>
       ) : null}

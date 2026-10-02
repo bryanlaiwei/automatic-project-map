@@ -195,7 +195,7 @@ export function createApp(deps: AppDeps) {
         break;
       case "denied":
         res.status(403).json({
-          error: "The GitHub App is not installed on this repository, or the repository id does not match.",
+          error: `The GitHub App is not installed on ${parsed.data.owner}/${parsed.data.name}. Install it on that repository, then connect again.`,
         });
         return;
       case "not_permitted":
