@@ -19,6 +19,11 @@ export const processingDefaults = {
   retryBaseMs: 30_000,
   retryMaxMs: 30 * 60_000,
   interpretationRounds: 10,
+  /**
+   * Written to `projects.locked_until` before each model call. Covers one call (120s, plus the OpenAI
+   * client's retries) and then expires if this process stops.
+   */
+  interpretationLeaseMs: 8 * 60_000,
 };
 
 export type ProcessOptions = {
@@ -42,46 +47,84 @@ export type ProcessResult = {
 };
 
 /**
- * Applies pending facts, then interprets ready evidence. Facts serialize on the project row and never wait
- * behind a model call; interpretation is serialized per project by an advisory lock, and facts that arrive
- * meanwhile are applied between rounds.
+ * Applies pending facts, then interprets ready evidence. Facts serialize on the project row inside a short
+ * transaction. Interpretation is serialized per project by `projects.locked_until`: the lease is refreshed
+ * before each model call and cleared when the run finishes, so a connection is free while the model runs.
+ * Facts that arrive meanwhile are applied between rounds.
  */
 export async function processProject(pool: Pool, projectId: string, options: ProcessOptions): Promise<ProcessResult> {
   const result: ProcessResult = { busy: false, facts: [], interpretations: [], waitingEvidence: 0 };
   result.facts.push(...(await applyPendingFacts(pool, projectId)));
   if (options.interpreter) {
-    const lockClient = await pool.connect();
-    try {
-      const locked = await lockClient.query<{ locked: boolean }>(
-        `select pg_try_advisory_lock(hashtextextended($1, 0)) as locked`,
-        [`apm:project:${projectId}`],
-      );
-      if (!locked.rows[0]?.locked) {
-        result.busy = true;
-      } else {
-        try {
-          await abandonRunningBatches(pool, projectId);
-          for (let round = 0; round < processingDefaults.interpretationRounds; round += 1) {
-            const outcome = await interpretReadyEvidence(pool, projectId, options.interpreter, options);
-            if (!outcome) {
-              break;
-            }
-            result.interpretations.push(outcome);
-            result.facts.push(...(await applyPendingFacts(pool, projectId)));
-            if (outcome.status === "failed") {
-              break;
-            }
+    const lease = await acquireInterpretationLock(pool, projectId);
+    if (!lease) {
+      result.busy = true;
+    } else {
+      try {
+        await abandonRunningBatches(pool, projectId);
+        for (let round = 0; round < processingDefaults.interpretationRounds; round += 1) {
+          if (!(await renewInterpretationLock(pool, projectId, lease))) {
+            break;
           }
-        } finally {
-          await lockClient.query(`select pg_advisory_unlock(hashtextextended($1, 0))`, [`apm:project:${projectId}`]);
+          const outcome = await interpretReadyEvidence(pool, projectId, options.interpreter, options);
+          if (!outcome) {
+            break;
+          }
+          result.interpretations.push(outcome);
+          result.facts.push(...(await applyPendingFacts(pool, projectId)));
+          if (outcome.status === "failed") {
+            break;
+          }
         }
+      } finally {
+        await releaseInterpretationLock(pool, projectId, lease);
       }
-    } finally {
-      lockClient.release();
     }
   }
   result.waitingEvidence = await countWaitingEvidence(pool, projectId);
   return result;
+}
+
+type InterpretationLease = { untilMs: string };
+
+const interpretationLeaseSeconds = processingDefaults.interpretationLeaseMs / 1000;
+
+/** Claims the project until the lease expires. Returns null when another run already holds it. */
+async function acquireInterpretationLock(pool: Pool, projectId: string): Promise<InterpretationLease | null> {
+  const result = await pool.query<{ until_ms: string }>(
+    `update projects
+     set locked_until = date_trunc('milliseconds', now() + make_interval(secs => $2::float8))
+     where id = $1
+       and (locked_until is null or locked_until <= now())
+     returning (extract(epoch from locked_until) * 1000)::bigint::text as until_ms`,
+    [projectId, interpretationLeaseSeconds],
+  );
+  const untilMs = result.rows[0]?.until_ms;
+  return untilMs ? { untilMs } : null;
+}
+
+/** Pushes the same run's lease forward. False when it expired and another run took the project. */
+async function renewInterpretationLock(pool: Pool, projectId: string, lease: InterpretationLease): Promise<boolean> {
+  const result = await pool.query<{ until_ms: string }>(
+    `update projects
+     set locked_until = date_trunc('milliseconds', now() + make_interval(secs => $3::float8))
+     where id = $1 and locked_until = to_timestamp($2::numeric / 1000)
+     returning (extract(epoch from locked_until) * 1000)::bigint::text as until_ms`,
+    [projectId, lease.untilMs, interpretationLeaseSeconds],
+  );
+  const untilMs = result.rows[0]?.until_ms;
+  if (!untilMs) {
+    return false;
+  }
+  lease.untilMs = untilMs;
+  return true;
+}
+
+async function releaseInterpretationLock(pool: Pool, projectId: string, lease: InterpretationLease): Promise<void> {
+  await pool.query(`update projects set locked_until = null where id = $1 and locked_until = to_timestamp($2::numeric / 1000)`, [
+    projectId,
+    lease.untilMs,
+  ]);
 }
 
 async function applyPendingFacts(pool: Pool, projectId: string): Promise<FactsResult[]> {
