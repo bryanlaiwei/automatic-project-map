@@ -22,10 +22,11 @@ const githubApp = {
   privateKey: process.env.GITHUB_APP_PRIVATE_KEY ?? "",
 };
 
+const pool = getPool();
 const app = createApp({
-  pool: getPool(),
+  pool,
   webhookSecret,
-  verifyUser: verifySupabaseUser,
+  verifyUser: (token) => verifySupabaseUser(token, pool),
   verifyRepositoryAccess: createGithubRepositoryAccessCheck(githubApp),
   github: createGithubEnricher(githubApp),
   lookupGithubAccount: createGithubAccountLookup(githubApp),

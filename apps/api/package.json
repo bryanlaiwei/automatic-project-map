@@ -23,6 +23,7 @@
     "@apm/github-collector": "*",
     "@apm/shared": "*",
     "express": "^5.1.0",
+    "jose": "^6.2.12",
     "openai": "^7.23.0",
     "pg": "^8.16.3",
     "zod": "^4.1.11"
