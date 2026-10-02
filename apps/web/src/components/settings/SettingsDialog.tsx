@@ -365,7 +365,7 @@ function HelperTab({ token, settings, reload }: { token: string; settings: Proje
       await pairLocalHelper(code);
       setStatus(await readHelperStatus());
       await reload();
-      toast("Helper connected. Choose folders on the helper page.");
+      toast("Helper connected. Choose this project’s folders on the helper page.");
     } catch (reason) {
       setError(reason instanceof TypeError ? "The helper is not running on this computer. Start it with npm run dev:helper." : errorMessage(reason, "Pairing failed."));
       setFallbackCode(code);
@@ -375,12 +375,16 @@ function HelperTab({ token, settings, reload }: { token: string; settings: Proje
   }
 
   const running = status !== null && status !== undefined;
+  const here = running ? status.projects.find((entry) => entry.projectId === settings.project.id) : undefined;
+  const others = running ? status.projects.length - (here ? 1 : 0) : 0;
+  const connected = here !== undefined && !here.needsPairing;
+  const tone = !running ? "bg-zinc-300" : connected && here.selectedFolders > 0 ? "bg-emerald-500" : "bg-amber-400";
 
   return (
     <div className="space-y-7">
       <div className="rounded-xl p-4 ring-1 ring-zinc-200">
         <div className="flex items-start gap-3">
-          <span className={cx("mt-1.5 size-2.5 shrink-0 rounded-full", running ? (status.paired ? "bg-emerald-500" : "bg-amber-400") : "bg-zinc-300")} />
+          <span className={cx("mt-1.5 size-2.5 shrink-0 rounded-full", tone)} />
           <div className="min-w-0 flex-1">
             <p className="text-sm font-medium text-zinc-900">This computer</p>
             <p className="mt-0.5 text-sm text-zinc-500">
@@ -388,21 +392,32 @@ function HelperTab({ token, settings, reload }: { token: string; settings: Proje
                 ? "Checking for the helper…"
                 : !running
                   ? "The helper is not running. Start it with npm run dev:helper to collect Codex, Claude Code and Cursor sessions."
-                  : status.paired
-                    ? `${status.selectedFolders} folder${status.selectedFolders === 1 ? "" : "s"} selected · last upload ${timeAgo(status.lastUploadAt, now)}${status.queued > 0 ? ` · ${status.queued} waiting` : ""}`
-                    : "Running, but not connected to a project yet."}
+                  : !here
+                    ? `Running, but not connected to this project yet.${others > 0 ? ` It keeps collecting for ${others} other project${others === 1 ? "" : "s"}.` : ""}`
+                    : here.needsPairing
+                      ? "The server no longer accepts this computer for this project. Reconnect it."
+                      : here.selectedFolders === 0
+                        ? "Connected, but no folders are chosen for this project, so no sessions are collected yet."
+                        : `${here.selectedFolders} folder${here.selectedFolders === 1 ? "" : "s"} selected · last upload ${timeAgo(here.lastUploadAt, now)}${here.queued > 0 ? ` · ${here.queued} waiting` : ""}`}
             </p>
-            {running && status.lastError ? <p className="mt-1 text-xs text-rose-600">{status.lastError}</p> : null}
+            {here?.lastError ? <p className="mt-1 text-xs text-rose-600">{here.lastError}</p> : null}
             <div className="mt-3 flex flex-wrap gap-2">
-              <Button size="sm" variant={running && status.paired ? "secondary" : "primary"} loading={connecting} onClick={() => void connect()}>
-                {running && status.paired ? "Reconnect" : "Connect this computer"}
+              <Button size="sm" variant={connected ? "secondary" : "primary"} loading={connecting} onClick={() => void connect()}>
+                {here ? "Reconnect" : "Connect this computer"}
               </Button>
-              <a
-                href="/helper"
-                className="inline-flex h-8 items-center gap-1.5 rounded-lg px-2.5 text-[13px] font-medium text-zinc-600 hover:bg-zinc-100 hover:text-zinc-900"
-              >
-                Choose folders
-              </a>
+              {connected ? (
+                <a
+                  href={`/helper?project=${encodeURIComponent(settings.project.id)}`}
+                  className={cx(
+                    "inline-flex h-8 items-center gap-1.5 rounded-lg px-2.5 text-[13px] font-medium",
+                    here.selectedFolders === 0
+                      ? "bg-indigo-600 text-white shadow-sm hover:bg-indigo-500"
+                      : "text-zinc-600 hover:bg-zinc-100 hover:text-zinc-900",
+                  )}
+                >
+                  Choose folders
+                </a>
+              ) : null}
             </div>
             {error ? <p className="mt-3 text-sm text-rose-600">{error}</p> : null}
             {fallbackCode ? (

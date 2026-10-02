@@ -4,10 +4,11 @@
 import { createServer, type IncomingMessage, type Server, type ServerResponse } from "node:http";
 import { realpathSync } from "node:fs";
 import type { AddressInfo } from "node:net";
+import { sep } from "node:path";
 import { agents } from "./agents.js";
 import type { LogRoots } from "./collection-pass.js";
 import type { CollectorStatus } from "./collector-loop.js";
-import { LocalDb } from "./local-db.js";
+import { LocalDb, type PairingRecord } from "./local-db.js";
 
 const defaultPort = 47321;
 
@@ -43,16 +44,19 @@ export async function startLocalServer(options: LocalServerOptions): Promise<Ser
     const url = new URL(req.url ?? "/", `http://127.0.0.1:${port}`);
     try {
       if (req.method === "GET" && url.pathname === "/") {
-        const pairing = options.db.getPairing();
         send(
           res,
           200,
           {
-            pairing: pairing
-              ? { projectId: pairing.projectId, trackingStartedAt: pairing.trackingStartedAt, apiUrl: pairing.apiUrl }
-              : null,
+            pairings: options.db.pairings().map((pairing) => ({
+              projectId: pairing.projectId,
+              projectName: pairing.projectName,
+              trackingStartedAt: pairing.trackingStartedAt,
+              apiUrl: pairing.apiUrl,
+            })),
             folders: options.db.folders().map((folder) => ({
               id: folder.id,
+              projectId: folder.projectId,
               canonicalPath: folder.canonicalPath,
               enabled: folder.enabled,
             })),
@@ -86,13 +90,17 @@ export async function startLocalServer(options: LocalServerOptions): Promise<Ser
           send(res, 401, { error: message }, req, webOrigin);
           return;
         }
-        options.db.savePairing({
+        const replaced = options.db.savePairing({
           projectId: payload.projectId,
+          projectName: typeof payload.projectName === "string" ? payload.projectName : null,
           trackingStartedAt: payload.trackingStartedAt,
           apiUrl,
           deviceToken: payload.token,
           deviceId: payload.deviceId,
         });
+        if (replaced && replaced.deviceToken !== payload.token) {
+          void revokeToken(fetchImpl, replaced);
+        }
         void options.scanNow?.();
         send(res, 201, { paired: true, projectId: payload.projectId }, req, webOrigin);
         return;
@@ -113,9 +121,17 @@ export async function startLocalServer(options: LocalServerOptions): Promise<Ser
       if (req.method === "POST" && url.pathname === "/folders") {
         const body = await readJson(req);
         const folderPath = typeof body.path === "string" ? body.path.trim() : "";
-        const pairing = options.db.getPairing();
+        const pairings = options.db.pairings();
+        const requested = typeof body.projectId === "string" ? body.projectId : null;
+        const pairing = requested ? pairings.find((entry) => entry.projectId === requested) : pairings.length === 1 ? pairings[0] : undefined;
         if (!pairing) {
-          send(res, 409, { error: "Pair the helper before selecting folders." }, req, webOrigin);
+          const error =
+            pairings.length === 0
+              ? "Pair the helper before selecting folders."
+              : requested
+                ? "This computer is not connected to that project. Connect it from the project's Settings first."
+                : "Choose which project this folder is for.";
+          send(res, pairings.length === 0 || requested ? 409 : 400, { error }, req, webOrigin);
           return;
         }
         let canonical: string;
@@ -125,6 +141,21 @@ export async function startLocalServer(options: LocalServerOptions): Promise<Ser
           send(res, 400, { error: "That folder does not exist." }, req, webOrigin);
           return;
         }
+        const clash = options.db
+          .folders()
+          .find((folder) => folder.enabled && folder.projectId !== pairing.projectId && overlaps(folder.canonicalPath, canonical));
+        if (clash) {
+          const owner = pairings.find((entry) => entry.projectId === clash.projectId);
+          const name = owner?.projectName ?? "another project";
+          send(
+            res,
+            409,
+            { error: `That folder overlaps ${clash.canonicalPath}, which collects for ${name}. A session can only go to one project.` },
+            req,
+            webOrigin,
+          );
+          return;
+        }
         const saved = options.db.addFolder(pairing.projectId, canonical, new Date().toISOString());
         void options.scanNow?.();
         send(res, 201, { folder: saved }, req, webOrigin);
@@ -132,11 +163,22 @@ export async function startLocalServer(options: LocalServerOptions): Promise<Ser
       }
       if (req.method === "POST" && url.pathname.startsWith("/folders/") && url.pathname.endsWith("/disable")) {
         const id = decodeURIComponent(url.pathname.slice("/folders/".length, -"/disable".length));
+        const folder = options.db.folders().find((entry) => entry.id === id);
         options.db.setFolderEnabled(id, false);
-        const paired = options.db.getPairing();
-        if (paired) {
-          options.db.dropUnselected(paired.projectId, options.db.enabledRoots(paired.projectId));
+        if (folder) {
+          options.db.dropUnselected(folder.projectId, options.db.enabledRoots(folder.projectId));
         }
+        send(res, 204, null, req, webOrigin);
+        return;
+      }
+      if (req.method === "POST" && url.pathname.startsWith("/pairings/") && url.pathname.endsWith("/remove")) {
+        const projectId = decodeURIComponent(url.pathname.slice("/pairings/".length, -"/remove".length));
+        const removed = options.db.removePairing(projectId);
+        if (!removed) {
+          send(res, 404, { error: "This computer is not connected to that project." }, req, webOrigin);
+          return;
+        }
+        void revokeToken(fetchImpl, removed);
         send(res, 204, null, req, webOrigin);
         return;
       }
@@ -154,7 +196,26 @@ export async function startLocalServer(options: LocalServerOptions): Promise<Ser
   return server;
 }
 
-function isPairPayload(value: unknown): value is { token: string; deviceId: string; projectId: string; trackingStartedAt: string } {
+/** Tells the API to stop accepting a token this helper no longer uses. Best effort: the server may be offline. */
+async function revokeToken(fetchImpl: typeof fetch, pairing: PairingRecord): Promise<void> {
+  try {
+    await fetchImpl(`${pairing.apiUrl.replace(/\/$/, "")}/helper/token`, {
+      method: "DELETE",
+      headers: { Authorization: `Bearer ${pairing.deviceToken}` },
+    });
+  } catch {
+    // The server shows the device as unused; an owner can still disconnect it from Settings.
+  }
+}
+
+/** True when one folder is the other or sits inside it. */
+function overlaps(a: string, b: string): boolean {
+  return a === b || a.startsWith(`${b}${sep}`) || b.startsWith(`${a}${sep}`);
+}
+
+function isPairPayload(
+  value: unknown,
+): value is { token: string; deviceId: string; projectId: string; trackingStartedAt: string; projectName?: unknown } {
   if (typeof value !== "object" || value === null) {
     return false;
   }

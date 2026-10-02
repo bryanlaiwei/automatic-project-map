@@ -1,5 +1,5 @@
-// Runs a scan and an upload about every thirty seconds while the helper is paired.
-// It skips the scan when no folders are selected and waits longer after an upload failure.
+// Runs a scan and an upload about every thirty seconds for every project the helper is paired with.
+// Each project has its own folders, token and retry timer, so one project's failures do not hold up another.
 
 import { homedir } from "node:os";
 import { agents } from "./agents.js";
@@ -11,6 +11,22 @@ import type { LocalDb, PairingRecord } from "./local-db.js";
 export const defaultScanIntervalMs = 30_000;
 const maxUploadBackoffMs = 5 * 60_000;
 
+type PausedSession = { provider: string; sessionId: string; reason: string | null };
+
+export type ProjectCollectorStatus = {
+  projectId: string;
+  projectName: string | null;
+  trackingStartedAt: string;
+  needsPairing: boolean;
+  selectedFolders: number;
+  lastUploadAt: string | null;
+  queued: number;
+  paused: PausedSession[];
+  lastError: string | null;
+  nextUploadAt: string | null;
+};
+
+/** Totals across every paired project, plus each project on its own. */
 export type CollectorStatus = {
   paired: boolean;
   needsPairing: boolean;
@@ -20,9 +36,21 @@ export type CollectorStatus = {
   queued: number;
   uploaded: number;
   dropped: number;
-  paused: Array<{ provider: string; sessionId: string; reason: string | null }>;
+  paused: PausedSession[];
   lastError: string | null;
   nextUploadAt: string | null;
+  projects: ProjectCollectorStatus[];
+};
+
+type ProjectState = {
+  deviceId: string;
+  changes: ChangeTracker;
+  failures: number;
+  nextUploadAt: number;
+  uploadError: string | null;
+  scanError: string | null;
+  needsPairing: boolean;
+  lastUploadAt: string | null;
 };
 
 export function defaultLogRoots(env: NodeJS.ProcessEnv, home: string = homedir()): LogRoots {
@@ -51,16 +79,15 @@ export function uploadBackoffMs(failures: number): number {
 }
 
 export class CollectorLoop {
-  private readonly changes = new ChangeTracker();
   private readonly transportFor: (pairing: PairingRecord) => EventUploadTransport;
   private readonly now: () => number;
   private readonly log: (line: string) => void;
-  private failures = 0;
-  private nextUploadAt = 0;
-  private uploadError: string | null = null;
-  private pairedDevice: string | null = null;
+  private readonly projects = new Map<string, ProjectState>();
   private running: Promise<CollectorStatus> | null = null;
   private timer: ReturnType<typeof setInterval> | null = null;
+  private lastScanAt: string | null = null;
+  private uploaded = 0;
+  private dropped = 0;
   private current: CollectorStatus = {
     paired: false,
     needsPairing: false,
@@ -73,6 +100,7 @@ export class CollectorLoop {
     paused: [],
     lastError: null,
     nextUploadAt: null,
+    projects: [],
   };
 
   constructor(
@@ -93,7 +121,11 @@ export class CollectorLoop {
   }
 
   status(): CollectorStatus {
-    return { ...this.current, paused: [...this.current.paused] };
+    return {
+      ...this.current,
+      paused: [...this.current.paused],
+      projects: this.current.projects.map((project) => ({ ...project, paused: [...project.paused] })),
+    };
   }
 
   start(): void {
@@ -123,24 +155,56 @@ export class CollectorLoop {
     // The scan below is synchronous; let the request that triggered it answer first.
     await new Promise((resolve) => setImmediate(resolve));
     const { db } = this.options;
-    const pairing = db.getPairing();
-    if (!pairing) {
-      this.pairedDevice = null;
-      this.current = { ...this.current, paired: false, needsPairing: false, selectedFolders: 0, queued: 0, paused: [] };
-      return this.status();
-    }
-    if (pairing.deviceId !== this.pairedDevice) {
-      this.pairedDevice = pairing.deviceId;
-      this.failures = 0;
-      this.nextUploadAt = 0;
-      this.uploadError = null;
-      this.current = { ...this.current, needsPairing: false, nextUploadAt: null };
+    const pairings = db.pairings();
+    const paired = new Set(pairings.map((pairing) => pairing.projectId));
+    for (const projectId of this.projects.keys()) {
+      if (!paired.has(projectId)) {
+        this.projects.delete(projectId);
+      }
     }
 
+    const unpaired = db.dropUnpairedProjects();
+    if (unpaired > 0) {
+      this.dropped += unpaired;
+      this.log(`dropped ${unpaired} queued events for projects this helper is no longer paired with`);
+    }
+
+    for (const pairing of pairings) {
+      await this.runProject(pairing, this.stateFor(pairing));
+    }
+    if (pairings.length > 0) {
+      this.lastScanAt = new Date(this.now()).toISOString();
+    }
+    this.current = this.summarize(pairings);
+    return this.status();
+  }
+
+  /** Starts fresh when a project is paired again, so an expired token's backoff does not carry over. */
+  private stateFor(pairing: PairingRecord): ProjectState {
+    const existing = this.projects.get(pairing.projectId);
+    if (existing && existing.deviceId === pairing.deviceId) {
+      return existing;
+    }
+    const state: ProjectState = {
+      deviceId: pairing.deviceId,
+      changes: existing?.changes ?? new ChangeTracker(),
+      failures: 0,
+      nextUploadAt: 0,
+      uploadError: null,
+      scanError: null,
+      needsPairing: false,
+      lastUploadAt: existing?.lastUploadAt ?? null,
+    };
+    this.projects.set(pairing.projectId, state);
+    return state;
+  }
+
+  private async runProject(pairing: PairingRecord, state: ProjectState): Promise<void> {
+    const { db } = this.options;
     const roots = db.enabledRoots(pairing.projectId);
-    this.changes.useScope([pairing.projectId, pairing.trackingStartedAt, ...roots].join("\u0000"));
+    state.changes.useScope([pairing.trackingStartedAt, ...roots].join("\u0000"));
 
-    let scanError: string | null = null;
+    state.scanError = null;
     try {
       if (roots.length > 0) {
         const pass = runCollectionPass({
@@ -149,87 +213,108 @@ export class CollectorLoop {
           trackingStartedAt: pairing.trackingStartedAt,
           selectedRoots: roots,
           logRoots: this.options.logRoots,
-          changes: this.changes,
+          changes: state.changes,
         });
         for (const failure of pass.failed) {
           this.log(`could not collect ${failure}`);
         }
         const first = pass.failed[0];
         if (first) {
-          scanError = `Could not collect ${pass.failed.length} session${pass.failed.length === 1 ? "" : "s"}; trying again next scan (${first})`;
+          state.scanError = `Could not collect ${pass.failed.length} session${pass.failed.length === 1 ? "" : "s"}; trying again next scan (${first})`;
         }
       }
-      this.current.lastScanAt = new Date(this.now()).toISOString();
     } catch (error) {
-      this.changes.forget();
-      scanError = `Scan failed: ${error instanceof Error ? error.message : "unknown error"}`;
-      this.log(scanError);
+      state.changes.forget();
+      state.scanError = `Scan failed: ${error instanceof Error ? error.message : "unknown error"}`;
+      this.log(state.scanError);
     }
 
     try {
-      const staleProject = db.dropOtherProjects(pairing.projectId);
-      if (staleProject > 0) {
-        this.current.dropped += staleProject;
-        this.log(`dropped ${staleProject} queued events for a project this helper is no longer paired with`);
-      }
       const unselected = db.dropUnselected(pairing.projectId, roots);
       if (unselected > 0) {
-        this.current.dropped += unselected;
+        this.dropped += unselected;
         this.log(`dropped ${unselected} queued events from sessions outside the selected folders`);
       }
-      await this.upload(pairing);
+      await this.upload(pairing, state);
     } catch (error) {
-      this.uploadError = `Upload failed: ${error instanceof Error ? error.message : "unknown error"}`;
-      this.log(this.uploadError);
+      state.uploadError = `Upload failed: ${error instanceof Error ? error.message : "unknown error"}`;
+      this.log(state.uploadError);
     }
-
-    this.current = {
-      ...this.current,
-      paired: true,
-      selectedFolders: roots.length,
-      queued: db.pendingCount(),
-      paused: db.pausedSessions(pairing.projectId),
-      lastError: scanError ?? this.uploadError,
-      nextUploadAt: this.nextUploadAt > this.now() ? new Date(this.nextUploadAt).toISOString() : null,
-    };
-    return this.status();
   }
 
-  private async upload(pairing: PairingRecord): Promise<void> {
-    if (this.options.db.pendingCount() === 0) {
-      if (!this.current.needsPairing) {
-        this.uploadError = null;
+  private async upload(pairing: PairingRecord, state: ProjectState): Promise<void> {
+    const { db } = this.options;
+    if (db.pendingCount(pairing.projectId) === 0) {
+      if (!state.needsPairing) {
+        state.uploadError = null;
       }
       return;
     }
-    if (this.now() < this.nextUploadAt) {
+    if (this.now() < state.nextUploadAt) {
       return;
     }
-    const result = await flushOutbox(this.options.db, this.transportFor(pairing), { projectId: pairing.projectId });
-    this.current.uploaded += result.acknowledged.length;
-    this.current.dropped += result.rejected.length;
+    const result = await flushOutbox(db, this.transportFor(pairing), { projectId: pairing.projectId });
+    this.uploaded += result.acknowledged.length;
+    this.dropped += result.rejected.length;
     for (const rejected of result.rejected) {
       this.log(`server rejected ${rejected.eventId} (${rejected.reason}); dropped it from the queue`);
     }
+    const name = pairing.projectName ?? pairing.projectId;
     if (result.error === null) {
-      this.failures = 0;
-      this.nextUploadAt = 0;
-      this.uploadError = null;
-      this.current.needsPairing = false;
+      state.failures = 0;
+      state.nextUploadAt = 0;
+      state.uploadError = null;
+      state.needsPairing = false;
       if (result.acknowledged.length > 0) {
-        this.current.lastUploadAt = new Date(this.now()).toISOString();
-        this.log(`uploaded ${result.acknowledged.length} events`);
+        state.lastUploadAt = new Date(this.now()).toISOString();
+        this.log(`uploaded ${result.acknowledged.length} events for ${name}`);
       }
       return;
     }
-    this.failures += 1;
-    this.nextUploadAt = this.now() + uploadBackoffMs(this.failures);
-    this.uploadError = result.error;
-    this.current.needsPairing = result.unauthorized;
+    state.failures += 1;
+    state.nextUploadAt = this.now() + uploadBackoffMs(state.failures);
+    state.uploadError = result.error;
+    state.needsPairing = result.unauthorized;
     this.log(
       result.unauthorized
-        ? "upload refused: this helper needs to be paired again"
-        : `upload failed (${result.error}); retrying in ${Math.round(uploadBackoffMs(this.failures) / 1000)}s`,
+        ? `upload refused for ${name}: this helper needs to be paired with it again`
+        : `upload for ${name} failed (${result.error}); retrying in ${Math.round(uploadBackoffMs(state.failures) / 1000)}s`,
     );
+  }
+
+  private summarize(pairings: PairingRecord[]): CollectorStatus {
+    const { db } = this.options;
+    const now = this.now();
+    const projects = pairings.map((pairing): ProjectCollectorStatus => {
+      const state = this.projects.get(pairing.projectId);
+      return {
+        projectId: pairing.projectId,
+        projectName: pairing.projectName,
+        trackingStartedAt: pairing.trackingStartedAt,
+        needsPairing: state?.needsPairing ?? false,
+        selectedFolders: db.enabledRoots(pairing.projectId).length,
+        lastUploadAt: state?.lastUploadAt ?? null,
+        queued: db.pendingCount(pairing.projectId),
+        paused: db.pausedSessions(pairing.projectId),
+        lastError: state ? (state.scanError ?? state.uploadError) : null,
+        nextUploadAt: state && state.nextUploadAt > now ? new Date(state.nextUploadAt).toISOString() : null,
+      };
+    });
+    const latest = (values: Array<string | null>, pick: (a: string, b: string) => boolean) =>
+      values.reduce<string | null>((best, value) => (value !== null && (best === null || pick(value, best)) ? value : best), null);
+    return {
+      paired: projects.length > 0,
+      needsPairing: projects.some((project) => project.needsPairing),
+      selectedFolders: projects.reduce((sum, project) => sum + project.selectedFolders, 0),
+      lastScanAt: this.lastScanAt,
+      lastUploadAt: latest(projects.map((project) => project.lastUploadAt), (a, b) => a > b),
+      queued: db.pendingCount(),
+      uploaded: this.uploaded,
+      dropped: this.dropped,
+      paused: projects.flatMap((project) => project.paused),
+      lastError: projects.find((project) => project.lastError !== null)?.lastError ?? null,
+      nextUploadAt: latest(projects.map((project) => project.nextUploadAt), (a, b) => a < b),
+      projects,
+    };
   }
 }

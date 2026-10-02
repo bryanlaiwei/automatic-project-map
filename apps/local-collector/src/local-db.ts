@@ -40,6 +40,8 @@ export type OutboxEvent = {
 
 export type PairingRecord = {
   projectId: string;
+  /** owner/name, shown on the helper page. Null for pairings saved before names were recorded. */
+  projectName: string | null;
   trackingStartedAt: string;
   apiUrl: string;
   deviceToken: string;
@@ -61,8 +63,9 @@ create table if not exists folder_selections (
 create table if not exists excluded_sessions (
   provider text not null,
   session_id text not null,
+  project_id text not null,
   reason text not null,
-  primary key (provider, session_id)
+  primary key (provider, session_id, project_id)
 );
 create table if not exists session_checkpoints (
   provider text not null,
@@ -91,12 +94,16 @@ create table if not exists outbox (
 );
 create table if not exists pairing (
   project_id text primary key,
+  project_name text,
   tracking_started_at text not null,
   api_url text not null,
   device_token text not null,
   device_id text not null
 );
 `;
+
+const pairingColumns = `project_id as projectId, project_name as projectName, tracking_started_at as trackingStartedAt,
+  api_url as apiUrl, device_token as deviceToken, device_id as deviceId`;
 
 function sessionIdFromEvent(event: NormalizedEvent, fallback: string): string {
   if (event.details.kind === "session.started" || event.details.kind === "session.content_added") {
@@ -111,8 +118,26 @@ export class LocalDb {
   constructor(filename: string) {
     this.db = new Database(filename);
     this.db.pragma("journal_mode = WAL");
+    this.upgradeOlderBuild();
     this.db.exec(schema);
     this.db.exec("drop table if exists discovery_state");
+  }
+
+  /**
+   * Older builds kept one pairing and excluded sessions for every project at once. Exclusions are
+   * rebuilt per project on the next scan, so the old table is dropped rather than guessed at.
+   */
+  private upgradeOlderBuild(): void {
+    const columns = (table: string) =>
+      (this.db.prepare(`select name from pragma_table_info(?)`).all(table) as Array<{ name: string }>).map((row) => row.name);
+    const excluded = columns("excluded_sessions");
+    if (excluded.length > 0 && !excluded.includes("project_id")) {
+      this.db.exec("drop table excluded_sessions");
+    }
+    const pairing = columns("pairing");
+    if (pairing.length > 0 && !pairing.includes("project_name")) {
+      this.db.exec("alter table pairing add column project_name text");
+    }
   }
 
   close(): void {
@@ -131,32 +156,45 @@ export class LocalDb {
     return value;
   }
 
-  /** The helper belongs to one project at a time, so a new pairing replaces the previous one. */
-  savePairing(pairing: PairingRecord): void {
-    const clear = this.db.prepare("delete from pairing");
-    const insert = this.db.prepare(
-      `insert into pairing (project_id, tracking_started_at, api_url, device_token, device_id)
-       values (@projectId, @trackingStartedAt, @apiUrl, @deviceToken, @deviceId)`,
-    );
-    this.db.transaction(() => {
-      clear.run();
-      insert.run(pairing);
-    })();
+  /**
+   * Pairs the helper with one more project, or re-pairs a project it already had.
+   * Returns the pairing it replaced for the same project, so its old token can be revoked.
+   */
+  savePairing(pairing: PairingRecord): PairingRecord | null {
+    const previous = this.pairing(pairing.projectId);
+    this.db
+      .prepare(
+        `insert into pairing (project_id, project_name, tracking_started_at, api_url, device_token, device_id)
+         values (@projectId, @projectName, @trackingStartedAt, @apiUrl, @deviceToken, @deviceId)
+         on conflict (project_id) do update set
+           project_name = excluded.project_name,
+           tracking_started_at = excluded.tracking_started_at,
+           api_url = excluded.api_url,
+           device_token = excluded.device_token,
+           device_id = excluded.device_id`,
+      )
+      .run(pairing);
+    return previous;
   }
 
-  getPairing(): PairingRecord | null {
-    const row = this.db
-      .prepare(
-        `select project_id as projectId, tracking_started_at as trackingStartedAt, api_url as apiUrl,
-                device_token as deviceToken, device_id as deviceId
-         from pairing order by rowid desc limit 1`,
-      )
-      .get() as PairingRecord | undefined;
+  pairings(): PairingRecord[] {
+    return this.db.prepare(`select ${pairingColumns} from pairing order by rowid`).all() as PairingRecord[];
+  }
+
+  pairing(projectId: string): PairingRecord | null {
+    const row = this.db.prepare(`select ${pairingColumns} from pairing where project_id = ?`).get(projectId) as PairingRecord | undefined;
     return row ?? null;
   }
 
-  clearPairing(): void {
-    this.db.prepare("delete from pairing").run();
+  /** Stops collecting for one project: forgets its pairing, its folders and anything still queued for it. */
+  removePairing(projectId: string): PairingRecord | null {
+    const removed = this.pairing(projectId);
+    this.db.transaction(() => {
+      this.db.prepare("delete from pairing where project_id = ?").run(projectId);
+      this.db.prepare("delete from folder_selections where project_id = ?").run(projectId);
+      this.db.prepare("delete from outbox where project_id = ?").run(projectId);
+    })();
+    return removed;
   }
 
   addFolder(projectId: string, canonicalPath: string, enabledAt: string): FolderSelection {
@@ -195,20 +233,21 @@ export class LocalDb {
     }));
   }
 
-  isExcluded(provider: string, sessionId: string): boolean {
+  /** Exclusions are per project: a session older than one project's tracking start may still be new to another. */
+  isExcluded(provider: string, sessionId: string, projectId: string): boolean {
     const row = this.db
-      .prepare("select 1 as found from excluded_sessions where provider = ? and session_id = ?")
-      .get(provider, sessionId) as { found: number } | undefined;
+      .prepare("select 1 as found from excluded_sessions where provider = ? and session_id = ? and project_id = ?")
+      .get(provider, sessionId, projectId) as { found: number } | undefined;
     return row !== undefined;
   }
 
-  excludeSession(provider: string, sessionId: string, reason: string): void {
+  excludeSession(provider: string, sessionId: string, projectId: string, reason: string): void {
     this.db
       .prepare(
-        `insert into excluded_sessions (provider, session_id, reason) values (?, ?, ?)
-         on conflict (provider, session_id) do nothing`,
+        `insert into excluded_sessions (provider, session_id, project_id, reason) values (?, ?, ?, ?)
+         on conflict (provider, session_id, project_id) do nothing`,
       )
-      .run(provider, sessionId, reason);
+      .run(provider, sessionId, projectId, reason);
   }
 
   checkpoint(provider: string, sessionId: string, projectId: string): SessionCheckpoint | null {
@@ -281,8 +320,10 @@ export class LocalDb {
     this.queueAndAdvance({ ...checkpoint, paused: true }, []);
   }
 
-  dropQueuedSession(provider: string, sessionId: string): number {
-    const result = this.db.prepare("delete from outbox where provider = ? and session_id = ?").run(provider, sessionId);
+  dropQueuedSession(provider: string, sessionId: string, projectId: string): number {
+    const result = this.db
+      .prepare("delete from outbox where provider = ? and session_id = ? and project_id = ?")
+      .run(provider, sessionId, projectId);
     return result.changes;
   }
 
@@ -313,8 +354,12 @@ export class LocalDb {
     }));
   }
 
-  pendingCount(): number {
-    return (this.db.prepare("select count(*) as count from outbox").get() as { count: number }).count;
+  pendingCount(projectId?: string): number {
+    const row =
+      projectId === undefined
+        ? this.db.prepare("select count(*) as count from outbox").get()
+        : this.db.prepare("select count(*) as count from outbox where project_id = ?").get(projectId);
+    return (row as { count: number }).count;
   }
 
   acknowledge(eventIds: string[]): void {
@@ -331,8 +376,9 @@ export class LocalDb {
     this.acknowledge(eventIds);
   }
 
-  dropOtherProjects(projectId: string): number {
-    return this.db.prepare("delete from outbox where project_id <> ?").run(projectId).changes;
+  /** Drops queued events for projects this helper is no longer paired with. */
+  dropUnpairedProjects(): number {
+    return this.db.prepare("delete from outbox where project_id not in (select project_id from pairing)").run().changes;
   }
 
   enabledRoots(projectId: string): string[] {
@@ -356,7 +402,7 @@ export class LocalDb {
     let dropped = 0;
     for (const session of queued) {
       if (session.workingFolder === null || matchingRoot(session.workingFolder, [...roots]) === null) {
-        dropped += this.dropQueuedSession(session.provider, session.sessionId);
+        dropped += this.dropQueuedSession(session.provider, session.sessionId, projectId);
       }
     }
     return dropped;

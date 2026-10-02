@@ -310,6 +310,7 @@ export function createApp(deps: AppDeps) {
       token: exchanged.token,
       deviceId: exchanged.device.id,
       projectId: exchanged.device.projectId,
+      projectName: exchanged.projectName,
       trackingStartedAt: exchanged.device.trackingStartedAt,
     });
   });
