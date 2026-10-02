@@ -1,3 +1,4 @@
+import { modelProviderIdSchema, type ModelProviderId } from "@apm/shared";
 import { defaultOpenAiModel } from "./graph/openai-interpreter.js";
 
 export const modelProviders = [
@@ -21,14 +22,12 @@ export const modelProviders = [
   },
 ] as const;
 
-export type ModelProviderId = (typeof modelProviders)[number]["id"];
+export type { ModelProviderId };
 
 export type ModelProviderSpec = (typeof modelProviders)[number];
 
-const providerIds: ReadonlySet<string> = new Set(modelProviders.map((provider) => provider.id));
-
 export function isModelProviderId(value: string): value is ModelProviderId {
-  return providerIds.has(value);
+  return modelProviderIdSchema.safeParse(value).success;
 }
 
 export function modelProvider(id: ModelProviderId): ModelProviderSpec {

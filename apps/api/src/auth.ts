@@ -1,14 +1,9 @@
 import { jwtVerify, type JWTVerifyOptions } from "jose";
 import type { Pool } from "pg";
+import type { AuthUser } from "@apm/core/auth-user";
+import { config } from "@apm/core/config";
 
-export type AuthUser = {
-  id: string;
-  githubLogin?: string | null;
-  /** GitHub's numeric account id, as a decimal string. Unlike the login, it never changes hands. */
-  githubId?: string | null;
-  name?: string | null;
-  avatarUrl?: string | null;
-};
+export type { AuthUser };
 
 const userIdPattern = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 
@@ -27,11 +22,11 @@ export async function verifySupabaseUser(token: string, pool: Pool): Promise<Aut
 }
 
 async function supabaseUserId(token: string): Promise<string | null> {
-  const secret = process.env.SUPABASE_JWT_SECRET;
+  const secret = config().supabaseJwtSecret;
   if (!secret || token === "") {
     return null;
   }
-  const url = process.env.SUPABASE_URL?.replace(/\/$/, "");
+  const url = config().supabaseUrl?.replace(/\/$/, "");
   const options: JWTVerifyOptions = { algorithms: ["HS256"], audience: "authenticated" };
   if (url) {
     options.issuer = `${url}/auth/v1`;

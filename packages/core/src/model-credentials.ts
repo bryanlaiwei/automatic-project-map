@@ -1,4 +1,5 @@
 import type { Pool } from "pg";
+import { modelCredentialSchema, type ModelCredential } from "@apm/shared";
 import type { Interpreter } from "./graph/process.js";
 import { createModelInterpreter } from "./graph/model-interpreter.js";
 import { graphPromptVersion } from "./graph/graph-prompt.js";
@@ -6,12 +7,7 @@ import { openAiInterpreterFromEnv } from "./graph/openai-interpreter.js";
 import { isModelProviderId, modelProvider, type ModelProviderId } from "./model-providers.js";
 import { ciphertextBuffer, ModelSecretsError, openModelKey, sealModelKey } from "./secret-box.js";
 
-export type PublicModelCredential = {
-  provider: ModelProviderId;
-  model: string;
-  hint: string;
-  updatedAt: string;
-};
+export type PublicModelCredential = ModelCredential;
 
 type CredentialRow = {
   provider: string;
@@ -132,12 +128,12 @@ function publicCredential(row: CredentialRow | undefined): PublicModelCredential
   if (!row || !isModelProviderId(row.provider)) {
     return null;
   }
-  return {
+  return modelCredentialSchema.parse({
     provider: row.provider,
     model: row.model,
     hint: row.key_hint,
     updatedAt: row.updated_at.toISOString(),
-  };
+  });
 }
 
 function failingInterpreter(message: string): Interpreter {

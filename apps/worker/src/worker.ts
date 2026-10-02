@@ -1,8 +1,8 @@
 import PgBoss from "pg-boss";
 import type { Pool } from "pg";
-import { ensureProcessDeliveryQueue, processDeliveryQueue, type ProcessDeliveryJob } from "@apm/api/delivery-jobs";
-import { dueProjects, processProject, type InterpretationSchedule, type Interpreter, type ProcessResult } from "@apm/api/graph/process";
-import { insertEvents, processQueuedDeliveries } from "@apm/api/store";
+import { ensureProcessDeliveryQueue, processDeliveryQueue, type ProcessDeliveryJob } from "@apm/core/delivery-jobs";
+import { dueProjects, processProject, type InterpretationSchedule, type Interpreter, type ProcessResult } from "@apm/core/graph/process";
+import { insertEvents, processQueuedDeliveries } from "@apm/core/store";
 import type { GithubLookup } from "@apm/github-collector/enrich";
 import { refreshObservedGithub } from "@apm/github-collector/refresh";
 

@@ -5,6 +5,7 @@
   "type": "module",
   "exports": {
     "./access": "./src/access.ts",
+    "./github-client": "./src/github-client.ts",
     "./enrich": "./src/enrich.ts",
     "./refresh": "./src/refresh.ts",
     "./webhook": "./src/webhook.ts"

@@ -1,23 +1,25 @@
 import express, { type Request, type Response } from "express";
 import type { Pool } from "pg";
 import { z } from "zod";
-import { JSON_BODY_LIMIT_BYTES, SCHEMA_VERSION } from "@apm/shared";
-import type { AuthUser } from "./auth.js";
 import type { GithubAccountLookup, RepositoryAccessCheck } from "@apm/github-collector/access";
 import { verifyGithubSignature } from "@apm/github-collector/webhook";
-import { createPairingCode, exchangePairingCode, findHelperDevice, revokeHelperToken } from "./helper-tokens.js";
-import { graphRouter } from "./graph/routes.js";
-import { workspaceRouter } from "./workspace-routes.js";
-import { listProjectRoles, projectRole, type Role } from "./workspace.js";
-import { ingestEvents } from "./ingest-events.js";
-import type { ListSupplierModels, ModelKeyCheck } from "./model-providers.js";
+import type { AuthUser } from "@apm/core/auth-user";
+import { config } from "@apm/core/config";
+import { createPairingCode, exchangePairingCode, findHelperDevice, revokeHelperToken } from "@apm/core/helper-tokens";
+import { ingestEvents } from "@apm/core/ingest-events";
+import type { ListSupplierModels, ModelKeyCheck } from "@apm/core/model-providers";
 import {
   connectRepository,
   enqueueDelivery,
   listEvents,
   listProjects,
   userCanAccessProject,
-} from "./store.js";
+} from "@apm/core/store";
+import { listProjectRoles, projectRole, type Role } from "@apm/core/workspace";
+import { connectProjectResponseSchema, projectListSchema, JSON_BODY_LIMIT_BYTES, SCHEMA_VERSION } from "@apm/shared";
+import { graphRouter } from "./graph/routes.js";
+import { accessFrom, requireAccess } from "./require-access.js";
+import { workspaceRouter } from "./workspace-routes.js";
 
 const connectBody = z.object({
   owner: z.string().trim().min(1),
@@ -94,11 +96,7 @@ export function createApp(deps: AppDeps) {
   }
 
   const app = express();
-  const allowedOrigins = new Set([
-    process.env.WEB_ORIGIN ?? "http://127.0.0.1:5173",
-    "http://127.0.0.1:5173",
-    "http://localhost:5173",
-  ]);
+  const allowedOrigins = new Set([config().webOrigin, "http://127.0.0.1:5173", "http://localhost:5173"]);
 
   app.use((req, res, next) => {
     const requestOrigin = req.header("origin");
@@ -226,15 +224,17 @@ export function createApp(deps: AppDeps) {
       res.status(409).json({ error: message });
       return;
     }
-    res.status(201).json({
-      project: {
-        id: result.project.id,
-        owner: result.project.github_owner,
-        name: result.project.github_name,
-        repoId: Number(result.project.github_repo_id),
-        trackingStartedAt: result.project.tracking_started_at.toISOString(),
-      },
-    });
+    res.status(201).json(
+      connectProjectResponseSchema.parse({
+        project: {
+          id: result.project.id,
+          owner: result.project.github_owner,
+          name: result.project.github_name,
+          repoId: Number(result.project.github_repo_id),
+          trackingStartedAt: result.project.tracking_started_at.toISOString(),
+        },
+      }),
+    );
   });
 
   app.get("/projects", async (req, res) => {
@@ -244,29 +244,22 @@ export function createApp(deps: AppDeps) {
     }
     const projects = await listProjects(deps.pool, user.id);
     const roles = await listProjectRoles(deps.pool, user.id);
-    res.json({
-      projects: projects.map((project) => ({
-        id: project.id,
-        owner: project.github_owner,
-        name: project.github_name,
-        repoId: Number(project.github_repo_id),
-        trackingStartedAt: project.tracking_started_at.toISOString(),
-        role: roles.get(project.id) ?? "member",
-      })),
-    });
+    res.json(
+      projectListSchema.parse({
+        projects: projects.map((project) => ({
+          id: project.id,
+          owner: project.github_owner,
+          name: project.github_name,
+          repoId: Number(project.github_repo_id),
+          trackingStartedAt: project.tracking_started_at.toISOString(),
+          role: roles.get(project.id) ?? "member",
+        })),
+      }),
+    );
   });
 
-  app.get("/projects/:projectId/events", async (req, res) => {
-    const user = await requireUser(deps, req, res);
-    if (!user) {
-      return;
-    }
-    const projectId = req.params.projectId;
-    if (typeof projectId !== "string" || !(await userCanAccessProject(deps.pool, user.id, projectId))) {
-      res.status(404).json({ error: "Project not found." });
-      return;
-    }
-    const events = await listEvents(deps.pool, projectId);
+  app.get("/projects/:projectId/events", requireAccess((req, res) => projectMember(deps, req, res)), async (_req, res) => {
+    const events = await listEvents(deps.pool, accessFrom(res).projectId);
     res.json({ events });
   });
 
@@ -282,17 +275,9 @@ export function createApp(deps: AppDeps) {
     }),
   );
 
-  app.post("/projects/:projectId/helper/pairing-codes", async (req, res) => {
-    const user = await requireUser(deps, req, res);
-    if (!user) {
-      return;
-    }
-    const projectId = req.params.projectId;
-    if (typeof projectId !== "string" || !(await userCanAccessProject(deps.pool, user.id, projectId))) {
-      res.status(404).json({ error: "Project not found." });
-      return;
-    }
-    const pairing = await createPairingCode(deps.pool, { projectId, userId: user.id });
+  app.post("/projects/:projectId/helper/pairing-codes", requireAccess((req, res) => projectMember(deps, req, res)), async (_req, res) => {
+    const allowed = accessFrom(res);
+    const pairing = await createPairingCode(deps.pool, { projectId: allowed.projectId, userId: allowed.user.id });
     res.status(201).json(pairing);
   });
 

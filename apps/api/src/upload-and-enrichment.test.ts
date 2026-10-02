@@ -5,13 +5,13 @@ import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { normalizedEventSchema, SCHEMA_VERSION } from "@apm/shared";
 import type { RepositoryAccess } from "@apm/github-collector/access";
 import { applyPullRequestSnapshot, preserveKnownMerge, snapshotFromPullRequest, snapshotFromWorkflow } from "@apm/github-collector/enrich";
-import { loadEnvFile } from "./env.js";
+import { loadEnvFile } from "@apm/core/config";
 
 loadEnvFile();
 
 const { createApp } = await import("./app.js");
-const { getPool } = await import("./db.js");
-const { processQueuedDeliveries } = await import("./store.js");
+const { getPool } = await import("@apm/core/db");
+const { processQueuedDeliveries } = await import("@apm/core/store");
 
 const userId = "66666666-6666-4666-8666-666666666666";
 const secret = "test-webhook-secret";

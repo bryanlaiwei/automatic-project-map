@@ -1,187 +1,71 @@
-export type WorkItemState = "planned" | "in_progress" | "in_review" | "merged" | "closed" | "unknown";
-export type Basis = "observed" | "inferred" | "human";
-export type Role = "owner" | "member";
+import {
+  acceptedInvitationSchema,
+  connectProjectResponseSchema,
+  correctionResultSchema,
+  createdInvitationSchema,
+  featureResponseSchema,
+  graphRevisionSchema,
+  graphSchema,
+  layoutSchema,
+  meSchema,
+  modelCredentialSchema,
+  modelSetupSchema,
+  pairingCodeSchema,
+  projectListSchema,
+  projectSettingsSchema,
+  savedLayoutSchema,
+  supplierModelListSchema,
+  workItemResponseSchema,
+  type Basis,
+  type Contributors,
+  type Correction,
+  type EvidenceDetail,
+  type FeatureDetail,
+  type Graph,
+  type GraphFeature,
+  type GraphWorkItem,
+  type HistoryEntry,
+  type Me,
+  type ModelCredential,
+  type ModelProviderId,
+  type ModelSetup,
+  type NodePosition,
+  type Project,
+  type ProjectSettings,
+  type PullRequestDetail,
+  type Relationship,
+  type Role,
+  type SupplierModel,
+  type WorkItemDetail,
+  type WorkItemState,
+  type WorkflowRun,
+} from "@apm/shared";
 
-export type Project = {
-  id: string;
-  owner: string;
-  name: string;
-  repoId: number;
-  trackingStartedAt: string;
-  role: Role;
+export type {
+  Basis,
+  Contributors,
+  Correction,
+  EvidenceDetail,
+  FeatureDetail,
+  Graph,
+  GraphFeature,
+  GraphWorkItem,
+  HistoryEntry,
+  Me,
+  ModelCredential,
+  ModelProviderId,
+  ModelSetup,
+  NodePosition,
+  Project,
+  ProjectSettings,
+  PullRequestDetail,
+  Relationship,
+  Role,
+  SupplierModel,
+  WorkItemDetail,
+  WorkItemState,
+  WorkflowRun,
 };
-
-export type Contributors = { agents: string[]; people: string[] };
-
-export type GraphWorkItem = {
-  id: string;
-  title: string;
-  state: WorkItemState;
-  stateBasis: Basis;
-  blocked: boolean;
-  pullRequests: number[];
-  lastActivityAt: string | null;
-};
-
-export type GraphFeature = {
-  id: string;
-  title: string;
-  summary: string;
-  counts: Partial<Record<WorkItemState, number>>;
-  contributors: Contributors;
-  lastActivityAt: string | null;
-  workItems: GraphWorkItem[];
-};
-
-export type Relationship = { id: string; kind: "depends_on"; from: string; to: string; basis: Basis };
-
-export type Graph = {
-  revision: number;
-  features: GraphFeature[];
-  relationships: Relationship[];
-  pendingAnalysis: number;
-  pendingSince: string | null;
-};
-
-export type HistoryEntry = {
-  revision: number;
-  change: string;
-  before: unknown;
-  after: unknown;
-  basis: Basis;
-  evidenceIds: string[];
-  actor: string | null;
-  at: string;
-};
-
-export type WorkflowRun = {
-  artifactId: string;
-  runId: number;
-  url: string;
-  status: string;
-  conclusion: string | null;
-  attempt: number;
-  attempts: Array<{ attempt: number; status: string; conclusion: string | null; updatedAt: string }>;
-  jobs: Array<{ jobId: number; name: string; status: string; conclusion: string | null; attempt: number; updatedAt: string }>;
-};
-
-export type PullRequestDetail = {
-  artifactId: string;
-  number: number;
-  title: string;
-  url: string;
-  state: "open" | "closed";
-  draft: boolean;
-  merged: boolean;
-  author: string | null;
-  reviews: Array<{ reviewId: number; reviewer: string; decision: string; submittedAt: string }>;
-  basis: Basis;
-  runs: WorkflowRun[];
-};
-
-export type EvidenceDetail = {
-  id: string;
-  kind: "session_excerpt" | "pull_request";
-  source: string;
-  sessionId: string | null;
-  excerpt: string;
-  observedAt: string;
-  basis: Basis;
-};
-
-export type Supported<T> = { value: T; basis: Basis };
-
-export type WorkItemDetail = {
-  id: string;
-  mergedFrom?: string;
-  feature: { id: string; title: string };
-  title: Supported<string>;
-  summary: Supported<string>;
-  state: Supported<WorkItemState>;
-  blocked: { reason: string | null } | null;
-  contributors: Contributors;
-  pullRequests: PullRequestDetail[];
-  evidence: EvidenceDetail[];
-  relationships: Array<{
-    id: string;
-    direction: "depends_on" | "needed_by";
-    workItemId: string;
-    title: string;
-    basis: Basis;
-    evidenceIds: string[];
-  }>;
-  history: HistoryEntry[];
-  updatedAt: string;
-};
-
-export type FeatureDetail = {
-  id: string;
-  mergedFrom?: string;
-  title: Supported<string>;
-  summary: Supported<string>;
-  workItems: Array<{ id: string; title: string; summary: string; state: WorkItemState; stateBasis: Basis; blocked: boolean }>;
-  contributors: Contributors;
-  history: HistoryEntry[];
-};
-
-export type Me = {
-  user: { id: string; githubLogin: string | null; name: string | null; avatarUrl: string | null };
-  invitations: Array<{ id: string; project: { id: string; owner: string; name: string }; invitedBy: string | null; createdAt: string }>;
-};
-
-export type ProjectSettings = {
-  project: { id: string; owner: string; name: string; repoId: number; trackingStartedAt: string };
-  role: Role;
-  members: Array<{
-    userId: string;
-    githubLogin: string | null;
-    name: string | null;
-    avatarUrl: string | null;
-    role: Role;
-    joinedAt: string;
-    you: boolean;
-  }>;
-  invitations: Array<{ id: string; githubLogin: string; invitedBy: string | null; createdAt: string }>;
-  devices: Array<{ id: string; label: string; pairedBy: string | null; createdAt: string; lastSeenAt: string | null; yours: boolean }>;
-  health: {
-    github: { lastDeliveryAt: string | null; failedDeliveries: number; waitingDeliveries: number };
-    local: { lastSessionEventAt: string | null };
-    analysis: {
-      waiting: number;
-      waitingSince: string | null;
-      gaveUp: number;
-      lastAnalyzedAt: string | null;
-      lastFailure: { at: string; error: string } | null;
-      model: { provider: "openai" | "anthropic" | "gemini" | null; source: "owner" | "server" | "none" };
-    };
-  };
-};
-
-export type ModelProviderId = "openai" | "anthropic" | "gemini";
-
-export type ModelCredential = {
-  provider: ModelProviderId;
-  model: string;
-  hint: string;
-  updatedAt: string;
-};
-
-export type ModelSetup = {
-  credential: ModelCredential | null;
-  serverFallback: boolean;
-  providers: Array<{ id: ModelProviderId; label: string; defaultModel: string; keyHint: string }>;
-};
-
-export type SupplierModel = { id: string; label: string };
-
-export type Correction =
-  | { kind: "rename"; target: "feature" | "work_item"; id: string; title: string }
-  | { kind: "move"; workItemId: string; featureId: string }
-  | { kind: "merge"; target: "feature" | "work_item"; retiredId: string; survivingId: string }
-  | { kind: "split"; workItemId: string; title: string; evidenceIds: string[]; artifactIds: string[] }
-  | { kind: "dismiss"; relationshipId: string };
-
-export type NodePosition = { nodeId: string; x: number; y: number };
 
 export type HelperStatus = {
   paired: boolean;
@@ -205,7 +89,23 @@ export class ApiError extends Error {
   }
 }
 
-async function request<T>(path: string, token: string, init?: RequestInit): Promise<T> {
+type Parser<T> = { parse(data: unknown): T };
+
+async function request<T>(path: string, token: string, schema: Parser<T>, init?: RequestInit): Promise<T> {
+  const response = await send(path, token, init);
+  try {
+    return schema.parse(await response.json());
+  } catch (error) {
+    const message = error instanceof Error ? error.message : "The API response did not match the expected shape.";
+    throw new ApiError(message, response.status);
+  }
+}
+
+async function requestEmpty(path: string, token: string, init?: RequestInit): Promise<void> {
+  await send(path, token, init);
+}
+
+async function send(path: string, token: string, init?: RequestInit): Promise<Response> {
   const response = await fetch(`${apiUrl}${path}`, {
     ...init,
     headers: {
@@ -222,55 +122,54 @@ async function request<T>(path: string, token: string, init?: RequestInit): Prom
         : `Request failed (${response.status})`;
     throw new ApiError(message, response.status);
   }
-  if (response.status === 204) {
-    return undefined as T;
-  }
-  return (await response.json()) as T;
+  return response;
 }
 
 export const api = {
-  me: (token: string) => request<Me>("/me", token),
-  projects: (token: string) => request<{ projects: Project[] }>("/projects", token),
+  me: (token: string) => request("/me", token, meSchema),
+  projects: (token: string) => request("/projects", token, projectListSchema),
   connectProject: (token: string, input: { owner: string; name: string }) =>
-    request<{ project: Omit<Project, "role"> }>("/projects", token, { method: "POST", body: JSON.stringify(input) }),
+    request("/projects", token, connectProjectResponseSchema, { method: "POST", body: JSON.stringify(input) }),
   acceptInvitation: (token: string, invitationId: string) =>
-    request<{ projectId: string }>(`/invitations/${invitationId}/accept`, token, { method: "POST" }),
+    request(`/invitations/${invitationId}/accept`, token, acceptedInvitationSchema, { method: "POST" }),
 
-  graph: (token: string, projectId: string) => request<Graph>(`/projects/${projectId}/graph`, token),
-  revision: (token: string, projectId: string) =>
-    request<{ revision: number | null; pendingAnalysis: number; pendingSince: string | null }>(`/projects/${projectId}/graph/revision`, token),
+  graph: (token: string, projectId: string) => request(`/projects/${projectId}/graph`, token, graphSchema),
+  revision: (token: string, projectId: string) => request(`/projects/${projectId}/graph/revision`, token, graphRevisionSchema),
   workItem: (token: string, projectId: string, id: string) =>
-    request<{ revision: number; workItem: WorkItemDetail }>(`/projects/${projectId}/work-items/${id}`, token),
+    request(`/projects/${projectId}/work-items/${id}`, token, workItemResponseSchema),
   feature: (token: string, projectId: string, id: string) =>
-    request<{ revision: number; feature: FeatureDetail }>(`/projects/${projectId}/features/${id}`, token),
+    request(`/projects/${projectId}/features/${id}`, token, featureResponseSchema),
   correct: (token: string, projectId: string, correction: Correction) =>
-    request<{ status: "applied"; revision: number; createdWorkItemId: string | null }>(`/projects/${projectId}/corrections`, token, {
+    request(`/projects/${projectId}/corrections`, token, correctionResultSchema, {
       method: "POST",
       body: JSON.stringify(correction),
     }),
 
-  layout: (token: string, projectId: string) => request<{ positions: NodePosition[] }>(`/projects/${projectId}/layout`, token),
+  layout: (token: string, projectId: string) => request(`/projects/${projectId}/layout`, token, layoutSchema),
   saveLayout: (token: string, projectId: string, positions: NodePosition[]) =>
-    request<{ saved: number }>(`/projects/${projectId}/layout`, token, { method: "PUT", body: JSON.stringify({ positions }) }),
+    request(`/projects/${projectId}/layout`, token, savedLayoutSchema, { method: "PUT", body: JSON.stringify({ positions }) }),
 
-  settings: (token: string, projectId: string) => request<ProjectSettings>(`/projects/${projectId}/settings`, token),
-  modelSetup: (token: string) => request<ModelSetup>("/me/model", token),
+  settings: (token: string, projectId: string) => request(`/projects/${projectId}/settings`, token, projectSettingsSchema),
+  modelSetup: (token: string) => request("/me/model", token, modelSetupSchema),
   supplierModels: (token: string, input: { provider: ModelProviderId; apiKey: string }) =>
-    request<{ models: SupplierModel[] }>("/me/model/models", token, { method: "POST", body: JSON.stringify(input) }),
+    request("/me/model/models", token, supplierModelListSchema, { method: "POST", body: JSON.stringify(input) }),
   saveModelCredential: (token: string, input: { provider: ModelProviderId; apiKey: string; model: string }) =>
-    request<ModelCredential>("/me/model", token, { method: "PUT", body: JSON.stringify(input) }),
-  deleteModelCredential: (token: string) => request<void>("/me/model", token, { method: "DELETE" }),
+    request("/me/model", token, modelCredentialSchema, { method: "PUT", body: JSON.stringify(input) }),
+  deleteModelCredential: (token: string) => requestEmpty("/me/model", token, { method: "DELETE" }),
   invite: (token: string, projectId: string, githubLogin: string) =>
-    request<{ id: string }>(`/projects/${projectId}/invitations`, token, { method: "POST", body: JSON.stringify({ githubLogin }) }),
+    request(`/projects/${projectId}/invitations`, token, createdInvitationSchema, {
+      method: "POST",
+      body: JSON.stringify({ githubLogin }),
+    }),
   revokeInvitation: (token: string, projectId: string, invitationId: string) =>
-    request<void>(`/projects/${projectId}/invitations/${invitationId}`, token, { method: "DELETE" }),
+    requestEmpty(`/projects/${projectId}/invitations/${invitationId}`, token, { method: "DELETE" }),
   removeMember: (token: string, projectId: string, userId: string) =>
-    request<void>(`/projects/${projectId}/members/${userId}`, token, { method: "DELETE" }),
+    requestEmpty(`/projects/${projectId}/members/${userId}`, token, { method: "DELETE" }),
   revokeDevice: (token: string, projectId: string, deviceId: string) =>
-    request<void>(`/projects/${projectId}/devices/${deviceId}`, token, { method: "DELETE" }),
-  deleteProject: (token: string, projectId: string) => request<void>(`/projects/${projectId}`, token, { method: "DELETE" }),
+    requestEmpty(`/projects/${projectId}/devices/${deviceId}`, token, { method: "DELETE" }),
+  deleteProject: (token: string, projectId: string) => requestEmpty(`/projects/${projectId}`, token, { method: "DELETE" }),
   pairingCode: (token: string, projectId: string) =>
-    request<{ code: string; expiresAt: string }>(`/projects/${projectId}/helper/pairing-codes`, token, { method: "POST" }),
+    request(`/projects/${projectId}/helper/pairing-codes`, token, pairingCodeSchema, { method: "POST" }),
 };
 
 export type HelperFolder = { id: string; canonicalPath: string; enabled: boolean };

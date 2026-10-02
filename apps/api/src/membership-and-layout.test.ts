@@ -2,8 +2,8 @@ import type { Server } from "node:http";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { createApp } from "./app.js";
 import type { AuthUser } from "./auth.js";
-import { getPool } from "./db.js";
-import { loadEnvFile } from "./env.js";
+import { getPool } from "@apm/core/db";
+import { loadEnvFile } from "@apm/core/config";
 
 loadEnvFile();
 

@@ -1,6 +1,6 @@
 import { normalizedEventSchema, type NormalizedEvent } from "@apm/shared";
 import type { Pool } from "pg";
-import { signGithubAppJwt } from "./access.js";
+import { createGithubClient } from "./github-client.js";
 
 type JsonRecord = Record<string, unknown>;
 
@@ -287,12 +287,6 @@ function readJobs(body: unknown): WorkflowSnapshot["jobs"] {
   return summaries;
 }
 
-const githubApi = "https://api.github.com";
-const githubTimeoutMs = 15_000;
-const tokenReuseMarginMs = 5 * 60_000;
-
-type CachedToken = { token: string; expiresAt: number };
-
 /**
  * Reads current pull request and run details. Network failures and timeouts return null, so callers fall
  * back to what the webhook itself said instead of failing the delivery.
@@ -306,31 +300,26 @@ export function createGithubEnricher(input: {
   enrichPullRequest(owner: string, name: string, number: number): Promise<PullRequestSnapshot | null>;
   enrichWorkflowRun(owner: string, name: string, runId: number): Promise<WorkflowSnapshot | null>;
 } {
-  const fetchImpl = input.fetchImpl ?? fetch;
-  const now = input.now ?? Date.now;
-  const tokens = new Map<string, CachedToken>();
-  async function installationToken(owner: string, name: string): Promise<string | null> {
-    const key = `${owner}/${name}`.toLowerCase();
-    const cached = tokens.get(key);
-    if (cached && cached.expiresAt - tokenReuseMarginMs > now()) {
-      return cached.token;
+  const client = createGithubClient(input);
+  async function githubGet(path: string, token: string): Promise<unknown> {
+    try {
+      const response = await client.request(path, token, "GET");
+      return response.ok ? response.body : null;
+    } catch {
+      return null;
     }
-    const fresh = await requestInstallationToken(fetchImpl, input.appId, input.privateKey, owner, name);
-    if (fresh) {
-      tokens.set(key, fresh);
-    }
-    return fresh?.token ?? null;
   }
   return {
     async enrichPullRequest(owner, name, number) {
-      const token = await installationToken(owner, name);
-      if (!token) {
+      const installed = await client.installationToken(owner, name);
+      if (installed.status !== "ok") {
         return null;
       }
+      const token = installed.token;
       const [pull, commits, files] = await Promise.all([
-        githubGet(fetchImpl, `/repos/${encodeURIComponent(owner)}/${encodeURIComponent(name)}/pulls/${number}`, token),
-        githubGet(fetchImpl, `/repos/${encodeURIComponent(owner)}/${encodeURIComponent(name)}/pulls/${number}/commits?per_page=20`, token),
-        githubGet(fetchImpl, `/repos/${encodeURIComponent(owner)}/${encodeURIComponent(name)}/pulls/${number}/files?per_page=20`, token),
+        githubGet(`/repos/${encodeURIComponent(owner)}/${encodeURIComponent(name)}/pulls/${number}`, token),
+        githubGet(`/repos/${encodeURIComponent(owner)}/${encodeURIComponent(name)}/pulls/${number}/commits?per_page=20`, token),
+        githubGet(`/repos/${encodeURIComponent(owner)}/${encodeURIComponent(name)}/pulls/${number}/files?per_page=20`, token),
       ]);
       if (!pull) {
         return null;
@@ -338,79 +327,19 @@ export function createGithubEnricher(input: {
       return snapshotFromPullRequest(pull, commits, files);
     },
     async enrichWorkflowRun(owner, name, runId) {
-      const token = await installationToken(owner, name);
-      if (!token) {
+      const installed = await client.installationToken(owner, name);
+      if (installed.status !== "ok") {
         return null;
       }
+      const token = installed.token;
       const [run, jobs] = await Promise.all([
-        githubGet(fetchImpl, `/repos/${encodeURIComponent(owner)}/${encodeURIComponent(name)}/actions/runs/${runId}`, token),
-        githubGet(fetchImpl, `/repos/${encodeURIComponent(owner)}/${encodeURIComponent(name)}/actions/runs/${runId}/jobs?per_page=50`, token),
+        githubGet(`/repos/${encodeURIComponent(owner)}/${encodeURIComponent(name)}/actions/runs/${runId}`, token),
+        githubGet(`/repos/${encodeURIComponent(owner)}/${encodeURIComponent(name)}/actions/runs/${runId}/jobs?per_page=50`, token),
       ]);
       if (!run) {
         return null;
       }
       return snapshotFromWorkflow(run, jobs);
     },
-  };
-}
-
-async function requestInstallationToken(
-  fetchImpl: typeof fetch,
-  appId: string,
-  privateKey: string,
-  owner: string,
-  name: string,
-): Promise<CachedToken | null> {
-  if (appId.trim() === "" || privateKey.trim() === "") {
-    return null;
-  }
-  try {
-    const jwt = signGithubAppJwt(appId.trim(), privateKey);
-    const installation = await githubGet(fetchImpl, `/repos/${encodeURIComponent(owner)}/${encodeURIComponent(name)}/installation`, jwt);
-    const installationId = isRecord(installation) && typeof installation.id === "number" ? installation.id : null;
-    if (installationId === null) {
-      return null;
-    }
-    const tokenResponse = await githubPost(fetchImpl, `/app/installations/${installationId}/access_tokens`, jwt);
-    if (!isRecord(tokenResponse) || typeof tokenResponse.token !== "string" || tokenResponse.token.length === 0) {
-      return null;
-    }
-    const expiresAt = typeof tokenResponse.expires_at === "string" ? Date.parse(tokenResponse.expires_at) : Number.NaN;
-    return { token: tokenResponse.token, expiresAt: Number.isNaN(expiresAt) ? 0 : expiresAt };
-  } catch {
-    return null;
-  }
-}
-
-async function githubGet(fetchImpl: typeof fetch, path: string, token: string): Promise<unknown> {
-  return githubRequest(fetchImpl, path, token, "GET");
-}
-
-async function githubPost(fetchImpl: typeof fetch, path: string, token: string): Promise<unknown> {
-  return githubRequest(fetchImpl, path, token, "POST");
-}
-
-async function githubRequest(fetchImpl: typeof fetch, path: string, token: string, method: "GET" | "POST"): Promise<unknown> {
-  try {
-    const response = await fetchImpl(`${githubApi}${path}`, {
-      method,
-      headers: githubHeaders(token),
-      signal: AbortSignal.timeout(githubTimeoutMs),
-    });
-    if (!response.ok) {
-      return null;
-    }
-    return await response.json().catch(() => null);
-  } catch {
-    return null;
-  }
-}
-
-function githubHeaders(token: string): Record<string, string> {
-  return {
-    Authorization: `Bearer ${token}`,
-    Accept: "application/vnd.github+json",
-    "User-Agent": "automatic-project-map",
-    "X-GitHub-Api-Version": "2022-11-28",
   };
 }

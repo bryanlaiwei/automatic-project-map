@@ -1,33 +1,19 @@
 import type { Pool } from "pg";
+import {
+  featureDetailSchema,
+  graphSchema,
+  workItemDetailSchema,
+  type Basis,
+  type Contributors,
+  type FeatureDetail,
+  type Graph,
+  type WorkItemDetail,
+  type WorkItemState,
+} from "@apm/shared";
 import { pullRequestStateSchema, workflowRunStateSchema } from "./artifact-state.js";
-import { workItemStates, type Basis, type WorkItemState } from "./state.js";
+import { workItemStates } from "./state.js";
 
-/** Agents are source keys such as "codex"; people are GitHub logins of pull request authors. */
-export type Contributors = { agents: string[]; people: string[] };
-
-export type GraphView = {
-  revision: number;
-  features: Array<{
-    id: string;
-    title: string;
-    summary: string;
-    counts: Partial<Record<WorkItemState, number>>;
-    contributors: Contributors;
-    lastActivityAt: string | null;
-    workItems: Array<{
-      id: string;
-      title: string;
-      state: WorkItemState;
-      stateBasis: Basis;
-      blocked: boolean;
-      pullRequests: number[];
-      lastActivityAt: string | null;
-    }>;
-  }>;
-  relationships: Array<{ id: string; kind: "depends_on"; from: string; to: string; basis: Basis }>;
-  pendingAnalysis: number;
-  pendingSince: string | null;
-};
+export type { Contributors };
 
 export async function readRevision(pool: Pool, projectId: string): Promise<number | null> {
   const result = await pool.query<{ graph_revision: string }>(`select graph_revision from projects where id = $1`, [projectId]);
@@ -35,7 +21,7 @@ export async function readRevision(pool: Pool, projectId: string): Promise<numbe
   return row ? Number(row.graph_revision) : null;
 }
 
-export async function readGraph(pool: Pool, projectId: string): Promise<GraphView | null> {
+export async function readGraph(pool: Pool, projectId: string): Promise<Graph | null> {
   const revision = await readRevision(pool, projectId);
   if (revision === null) {
     return null;
@@ -91,7 +77,7 @@ export async function readGraph(pool: Pool, projectId: string): Promise<GraphVie
      order by r.created_at, r.id`,
     [projectId],
   );
-  return {
+  return graphSchema.parse({
     revision,
     features: features.rows.flatMap((feature) => {
       const rows = items.rows.filter((item) => item.feature_id === feature.id);
@@ -139,7 +125,7 @@ export async function readGraph(pool: Pool, projectId: string): Promise<GraphVie
       basis: row.basis,
     })),
     ...(await pendingAnalysis(pool, projectId)),
-  };
+  });
 }
 
 export type PendingAnalysis = { pendingAnalysis: number; pendingSince: string | null };
@@ -204,7 +190,7 @@ async function history(pool: Pool, projectId: string, kind: "feature" | "work_it
   }));
 }
 
-export async function readWorkItem(pool: Pool, projectId: string, requestedId: string) {
+export async function readWorkItem(pool: Pool, projectId: string, requestedId: string): Promise<WorkItemDetail | null> {
   const id = await resolve(pool, "work_item", requestedId);
   const itemResult = await pool.query<{
     id: string;
@@ -279,7 +265,7 @@ export async function readWorkItem(pool: Pool, projectId: string, requestedId: s
     people: sortedUnique(pullStates.flatMap((pull) => (pull.state.author ? [pull.state.author] : []))),
   };
 
-  return {
+  return workItemDetailSchema.parse({
     id: item.id,
     ...(item.id !== requestedId ? { mergedFrom: requestedId } : {}),
     feature: { id: item.feature_id, title: item.feature_title },
@@ -331,10 +317,10 @@ export async function readWorkItem(pool: Pool, projectId: string, requestedId: s
     })),
     history: await history(pool, projectId, "work_item", id),
     updatedAt: item.updated_at.toISOString(),
-  };
+  });
 }
 
-export async function readFeature(pool: Pool, projectId: string, requestedId: string) {
+export async function readFeature(pool: Pool, projectId: string, requestedId: string): Promise<FeatureDetail | null> {
   const id = await resolve(pool, "feature", requestedId);
   const feature = await pool.query<{ id: string; title: string; title_basis: Basis; summary: string; summary_basis: Basis }>(
     `select id, title, title_basis, summary, summary_basis from feature_groups
@@ -367,7 +353,7 @@ export async function readFeature(pool: Pool, projectId: string, requestedId: st
      where wi.feature_id = $1 and wi.retired_into is null and e.kind = 'session_excerpt'`,
     [id],
   );
-  return {
+  return featureDetailSchema.parse({
     id: row.id,
     ...(row.id !== requestedId ? { mergedFrom: requestedId } : {}),
     title: { value: row.title, basis: row.title_basis },
@@ -385,5 +371,5 @@ export async function readFeature(pool: Pool, projectId: string, requestedId: st
       people: sortedUnique(people.rows.map((row) => row.name)),
     },
     history: await history(pool, projectId, "feature", id),
-  };
+  });
 }

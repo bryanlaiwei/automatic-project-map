@@ -1,7 +1,7 @@
 import { randomUUID } from "node:crypto";
 import { SCHEMA_VERSION, type NormalizedEvent } from "@apm/shared";
 import { getPool } from "../db.js";
-import { loadEnvFile } from "../env.js";
+import { loadEnvFile } from "../config.js";
 import { ingestEvents } from "../ingest-events.js";
 import { connectRepository, insertEvents } from "../store.js";
 import { readGraph } from "./graph-read.js";

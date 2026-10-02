@@ -1,4 +1,4 @@
-import { createSign } from "node:crypto";
+import { createGithubClient } from "./github-client.js";
 
 export type RepositoryAccess =
   | { status: "accessible"; repoId?: number }
@@ -20,33 +20,32 @@ export type RepositoryAccessCheck = (input: {
 
 const connectingPermissions = new Set(["admin", "write"]);
 
-const githubApi = "https://api.github.com";
+const missingApp = {
+  status: "not_configured" as const,
+  message: "GitHub App credentials are not configured. Set GITHUB_APP_ID and GITHUB_APP_PRIVATE_KEY.",
+};
 
 export function createGithubRepositoryAccessCheck(input: {
   appId: string;
   privateKey: string;
   fetchImpl?: typeof fetch;
 }): RepositoryAccessCheck {
-  const fetchImpl = input.fetchImpl ?? fetch;
+  const client = createGithubClient(input);
   return async ({ owner, name, repoId, login }) => {
     if (input.appId.trim() === "" || input.privateKey.trim() === "") {
-      return {
-        status: "not_configured",
-        message: "GitHub App credentials are not configured. Set GITHUB_APP_ID and GITHUB_APP_PRIVATE_KEY.",
-      };
+      return missingApp;
     }
     if (login === null) {
       return { status: "not_permitted", message: "Sign in with GitHub to connect a repository." };
     }
 
     try {
-      const installation = await installationToken(fetchImpl, input.appId, input.privateKey, owner, name);
-      if (!("token" in installation)) {
-        return installation;
+      const installation = await client.installationToken(owner, name);
+      if (installation.status !== "ok") {
+        return installation.status === "denied" ? { status: "denied" } : installation;
       }
-      const { token } = installation;
       const repoPath = `/repos/${encodeURIComponent(owner)}/${encodeURIComponent(name)}`;
-      const repo = await githubRequest(fetchImpl, repoPath, token, "GET");
+      const repo = await client.request(repoPath, installation.token, "GET");
       if (repo.status === 404) {
         return { status: "denied" };
       }
@@ -60,7 +59,11 @@ export function createGithubRepositoryAccessCheck(input: {
       if (confirmedId === null || (repoId !== undefined && confirmedId !== repoId)) {
         return { status: "denied" };
       }
-      const permission = await githubRequest(fetchImpl, `${repoPath}/collaborators/${encodeURIComponent(login)}/permission`, token, "GET");
+      const permission = await client.request(
+        `${repoPath}/collaborators/${encodeURIComponent(login)}/permission`,
+        installation.token,
+        "GET",
+      );
       const level =
         typeof permission.body === "object" && permission.body !== null && "permission" in permission.body
           ? permission.body.permission
@@ -88,19 +91,19 @@ export type GithubAccount =
 export type GithubAccountLookup = (input: { owner: string; name: string; login: string }) => Promise<GithubAccount>;
 
 export function createGithubAccountLookup(input: { appId: string; privateKey: string; fetchImpl?: typeof fetch }): GithubAccountLookup {
-  const fetchImpl = input.fetchImpl ?? fetch;
+  const client = createGithubClient(input);
   return async ({ owner, name, login }) => {
     if (input.appId.trim() === "" || input.privateKey.trim() === "") {
-      return { status: "unavailable", message: "GitHub App credentials are not configured. Set GITHUB_APP_ID and GITHUB_APP_PRIVATE_KEY." };
+      return { status: "unavailable", message: missingApp.message };
     }
     try {
-      const installation = await installationToken(fetchImpl, input.appId, input.privateKey, owner, name);
-      if (!("token" in installation)) {
+      const installation = await client.installationToken(owner, name);
+      if (installation.status !== "ok") {
         return installation.status === "denied"
           ? { status: "unavailable", message: `The GitHub App can no longer see ${owner}/${name}.` }
           : installation;
       }
-      const user = await githubRequest(fetchImpl, `/users/${encodeURIComponent(login)}`, installation.token, "GET");
+      const user = await client.request(`/users/${encodeURIComponent(login)}`, installation.token, "GET");
       if (user.status === 404) {
         return { status: "not_found" };
       }
@@ -118,81 +121,9 @@ export function createGithubAccountLookup(input: { appId: string; privateKey: st
   };
 }
 
-async function installationToken(
-  fetchImpl: typeof fetch,
-  appId: string,
-  privateKey: string,
-  owner: string,
-  name: string,
-): Promise<{ token: string } | { status: "denied" } | { status: "unavailable"; message: string }> {
-  const jwt = signGithubAppJwt(appId.trim(), privateKey);
-  const installation = await githubRequest(fetchImpl, `/repos/${encodeURIComponent(owner)}/${encodeURIComponent(name)}/installation`, jwt, "GET");
-  if (installation.status === 404) {
-    return { status: "denied" };
-  }
-  if (!installation.ok) {
-    return { status: "unavailable", message: "GitHub did not confirm the App installation for this repository." };
-  }
-  const installationId = readNumberId(installation.body);
-  if (installationId === null) {
-    return { status: "unavailable", message: "GitHub installation response did not include an id." };
-  }
-  const tokenResponse = await githubRequest(fetchImpl, `/app/installations/${installationId}/access_tokens`, jwt, "POST");
-  if (!tokenResponse.ok) {
-    return { status: "unavailable", message: "Could not create a GitHub App installation token." };
-  }
-  const token = readToken(tokenResponse.body);
-  if (token === null) {
-    return { status: "unavailable", message: "GitHub did not return an installation token." };
-  }
-  return { token };
-}
-
-export function signGithubAppJwt(appId: string, privateKey: string): string {
-  const now = Math.floor(Date.now() / 1000);
-  const header = Buffer.from(JSON.stringify({ alg: "RS256", typ: "JWT" })).toString("base64url");
-  const payload = Buffer.from(JSON.stringify({ iat: now - 60, exp: now + 540, iss: appId })).toString("base64url");
-  const unsigned = `${header}.${payload}`;
-  const signer = createSign("RSA-SHA256");
-  signer.update(unsigned);
-  signer.end();
-  return `${unsigned}.${signer.sign(normalizePem(privateKey)).toString("base64url")}`;
-}
-
-function normalizePem(value: string): string {
-  const trimmed = value.trim();
-  return trimmed.includes("\\n") ? trimmed.replace(/\\n/g, "\n") : trimmed;
-}
-
-async function githubRequest(
-  fetchImpl: typeof fetch,
-  path: string,
-  token: string,
-  method: "GET" | "POST",
-): Promise<{ ok: boolean; status: number; body: unknown }> {
-  const response = await fetchImpl(`${githubApi}${path}`, {
-    method,
-    headers: {
-      Authorization: `Bearer ${token}`,
-      Accept: "application/vnd.github+json",
-      "User-Agent": "automatic-project-map",
-      "X-GitHub-Api-Version": "2022-11-28",
-    },
-  });
-  const body: unknown = await response.json().catch(() => null);
-  return { ok: response.ok, status: response.status, body };
-}
-
 function readNumberId(body: unknown): number | null {
   if (typeof body !== "object" || body === null || !("id" in body) || typeof body.id !== "number") {
     return null;
   }
   return body.id;
-}
-
-function readToken(body: unknown): string | null {
-  if (typeof body !== "object" || body === null || !("token" in body) || typeof body.token !== "string") {
-    return null;
-  }
-  return body.token.length > 0 ? body.token : null;
 }

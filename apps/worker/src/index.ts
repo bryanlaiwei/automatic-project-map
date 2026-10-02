@@ -1,26 +1,27 @@
-import { getPool } from "@apm/api/db";
-import { loadEnvFile } from "@apm/api/env";
+import { assertConfig } from "@apm/core/config";
 import { createGithubEnricher } from "@apm/github-collector/enrich";
-import { openAiInterpreterFromEnv } from "@apm/api/graph/openai-interpreter";
-import { resolveProjectInterpreter } from "@apm/api/model-credentials";
-import { backgroundJobs, startWorker } from "./worker.js";
 
-loadEnvFile();
-
-const connectionString = process.env.DATABASE_URL;
-if (!connectionString) {
-  console.error("DATABASE_URL is not set.");
+let settings: ReturnType<typeof assertConfig>;
+try {
+  settings = assertConfig("worker");
+} catch (error) {
+  console.error(error instanceof Error ? error.message : "Worker configuration is invalid.");
   process.exit(1);
 }
 
+const { getPool } = await import("@apm/core/db");
+const { openAiInterpreterFromEnv } = await import("@apm/core/graph/openai-interpreter");
+const { resolveProjectInterpreter } = await import("@apm/core/model-credentials");
+const { backgroundJobs, startWorker } = await import("./worker.js");
+
 const pool = getPool();
 const github = createGithubEnricher({
-  appId: process.env.GITHUB_APP_ID ?? "",
-  privateKey: process.env.GITHUB_APP_PRIVATE_KEY ?? "",
+  appId: settings.githubAppId,
+  privateKey: settings.githubAppPrivateKey,
 });
 const fallback = openAiInterpreterFromEnv();
 const worker = await startWorker({
-  connectionString,
+  connectionString: settings.databaseUrl,
   jobs: backgroundJobs({ pool, github }),
   deliveries: { pool, github },
   processing: {

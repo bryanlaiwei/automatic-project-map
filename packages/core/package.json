@@ -1,0 +1,48 @@
+{
+  "name": "@apm/core",
+  "version": "0.0.0",
+  "private": true,
+  "type": "module",
+  "exports": {
+    "./auth-user": "./src/auth-user.ts",
+    "./config": "./src/config.ts",
+    "./db": "./src/db.ts",
+    "./delivery-jobs": "./src/delivery-jobs.ts",
+    "./helper-tokens": "./src/helper-tokens.ts",
+    "./ingest-events": "./src/ingest-events.ts",
+    "./model-credentials": "./src/model-credentials.ts",
+    "./model-providers": "./src/model-providers.ts",
+    "./secret-box": "./src/secret-box.ts",
+    "./store": "./src/store.ts",
+    "./workspace": "./src/workspace.ts",
+    "./graph/context": "./src/graph/context.ts",
+    "./graph/corrections": "./src/graph/corrections.ts",
+    "./graph/graph-prompt": "./src/graph/graph-prompt.ts",
+    "./graph/graph-read": "./src/graph/graph-read.ts",
+    "./graph/model-interpreter": "./src/graph/model-interpreter.ts",
+    "./graph/openai-interpreter": "./src/graph/openai-interpreter.ts",
+    "./graph/process": "./src/graph/process.ts",
+    "./graph/proposal": "./src/graph/proposal.ts"
+  },
+  "scripts": {
+    "typecheck": "tsc --noEmit",
+    "test": "vitest run",
+    "eval": "tsx src/graph/eval-grouping.ts",
+    "demo:seed": "tsx src/demo/seed-demo.ts"
+  },
+  "dependencies": {
+    "@apm/github-collector": "*",
+    "@apm/shared": "*",
+    "openai": "^7.23.0",
+    "pg": "^8.16.3",
+    "pg-boss": "^10.4.2",
+    "zod": "^4.1.11"
+  },
+  "devDependencies": {
+    "@types/node": "^22.18.6",
+    "@types/pg": "^8.15.5",
+    "tsx": "^4.20.5",
+    "typescript": "^5.9.2",
+    "vitest": "^3.2.4"
+  }
+}

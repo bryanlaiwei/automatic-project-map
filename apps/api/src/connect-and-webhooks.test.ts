@@ -2,13 +2,13 @@ import { createHmac } from "node:crypto";
 import type { Server } from "node:http";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import type { RepositoryAccess } from "@apm/github-collector/access";
-import { loadEnvFile } from "./env.js";
+import { loadEnvFile } from "@apm/core/config";
 
 loadEnvFile();
 
 const { createApp } = await import("./app.js");
-const { getPool } = await import("./db.js");
-const { processQueuedDeliveries } = await import("./store.js");
+const { getPool } = await import("@apm/core/db");
+const { processQueuedDeliveries } = await import("@apm/core/store");
 
 const userId = "44444444-4444-4444-8444-444444444444";
 const otherUserId = "55555555-5555-4555-8555-555555555555";

@@ -1,36 +1,27 @@
-import { readWebhookSecret } from "@apm/github-collector/webhook";
-import { startDeliveryPublisher } from "./delivery-jobs.js";
-import { loadEnvFile } from "./env.js";
+import { assertConfig } from "@apm/core/config";
+import { startDeliveryPublisher } from "@apm/core/delivery-jobs";
 
-loadEnvFile();
-
-let webhookSecret: string;
+let settings: ReturnType<typeof assertConfig>;
 try {
-  webhookSecret = readWebhookSecret();
+  settings = assertConfig("api");
 } catch (error) {
-  console.error(error instanceof Error ? error.message : "GITHUB_WEBHOOK_SECRET is missing or empty.");
+  console.error(error instanceof Error ? error.message : "API configuration is invalid.");
   process.exit(1);
 }
 
 const { createApp } = await import("./app.js");
 const { verifySupabaseUser } = await import("./auth.js");
-const { getPool } = await import("./db.js");
+const { getPool } = await import("@apm/core/db");
 const { createGithubAccountLookup, createGithubRepositoryAccessCheck } = await import("@apm/github-collector/access");
 
 const githubApp = {
-  appId: process.env.GITHUB_APP_ID ?? "",
-  privateKey: process.env.GITHUB_APP_PRIVATE_KEY ?? "",
+  appId: settings.githubAppId,
+  privateKey: settings.githubAppPrivateKey,
 };
-
-const connectionString = process.env.DATABASE_URL;
-if (!connectionString) {
-  console.error("DATABASE_URL is not set.");
-  process.exit(1);
-}
 
 let enqueueDeliveryProcessing: (deliveryId: string) => Promise<void>;
 try {
-  const deliveries = await startDeliveryPublisher(connectionString);
+  const deliveries = await startDeliveryPublisher(settings.databaseUrl);
   enqueueDeliveryProcessing = (deliveryId) => deliveries.enqueue(deliveryId);
 } catch (error) {
   console.error(error instanceof Error ? error.message : "Could not start the webhook job queue.");
@@ -40,14 +31,13 @@ try {
 const pool = getPool();
 const app = createApp({
   pool,
-  webhookSecret,
+  webhookSecret: settings.githubWebhookSecret ?? "",
   verifyUser: (token) => verifySupabaseUser(token, pool),
   verifyRepositoryAccess: createGithubRepositoryAccessCheck(githubApp),
   lookupGithubAccount: createGithubAccountLookup(githubApp),
   enqueueDeliveryProcessing,
 });
 
-const port = Number(process.env.API_PORT ?? 4000);
-app.listen(port, "127.0.0.1", () => {
-  console.log(`api listening on http://127.0.0.1:${port}`);
+app.listen(settings.apiPort, "127.0.0.1", () => {
+  console.log(`api listening on http://127.0.0.1:${settings.apiPort}`);
 });

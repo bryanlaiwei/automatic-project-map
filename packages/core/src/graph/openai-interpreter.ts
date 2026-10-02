@@ -1,4 +1,5 @@
 import OpenAI from "openai";
+import { config } from "../config.js";
 import { zodTextFormat } from "openai/helpers/zod";
 import { renderContext, type InterpretationContext } from "./context.js";
 import { graphInstructions, graphPromptVersion } from "./graph-prompt.js";
@@ -30,11 +31,13 @@ export function createOpenAiInterpreter(input: { apiKey: string; model?: string;
 }
 
 /** Reads OPENAI_API_KEY and OPENAI_MODEL; null when no key is configured. */
-export function openAiInterpreterFromEnv(env: NodeJS.ProcessEnv = process.env): Interpreter | null {
-  const apiKey = env.OPENAI_API_KEY?.trim();
-  if (!apiKey) {
+export function openAiInterpreterFromEnv(env?: NodeJS.ProcessEnv): Interpreter | null {
+  const settings = env
+    ? { openAiApiKey: env.OPENAI_API_KEY?.trim() || null, openAiModel: env.OPENAI_MODEL?.trim() || null }
+    : config();
+  if (!settings.openAiApiKey) {
     return null;
   }
-  const model = env.OPENAI_MODEL?.trim();
-  return createOpenAiInterpreter({ apiKey, ...(model ? { model } : {}) });
+  const model = settings.openAiModel;
+  return createOpenAiInterpreter({ apiKey: settings.openAiApiKey, ...(model ? { model } : {}) });
 }
