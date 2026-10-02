@@ -1,26 +1,56 @@
 import { useCallback, useEffect, useState, type FormEvent } from "react";
 import {
   addHelperFolder,
+  api,
   errorMessage,
   pairLocalHelper,
   readHelperOverview,
   removeHelperFolder,
+  removeHelperPairing,
   scanHelper,
+  type HelperFolder,
   type HelperOverview,
+  type HelperPairing,
+  type HelperProjectStatus,
+  type HelperStatus,
 } from "../api";
 import { agentLabel, formatDateTime } from "../format";
+import { supabase } from "../supabase";
 import { LogoMark } from "./GithubMark";
+import { cx } from "./helpers";
 import { useToast } from "./toast-context";
 import { AgentBadge, Button, ErrorNote, Field, Spinner, inputClass } from "./ui";
 
+/** Names for pairings saved before the helper recorded them, read from the signed-in account when there is one. */
+function useProjectNames(): Map<string, string> {
+  const [names, setNames] = useState(() => new Map<string, string>());
+  useEffect(() => {
+    let cancelled = false;
+    void supabase?.auth.getSession().then(async ({ data }) => {
+      const token = data.session?.access_token;
+      if (!token) {
+        return;
+      }
+      const list = await api.projects(token).catch(() => null);
+      if (!cancelled && list) {
+        setNames(new Map(list.projects.map((project) => [project.id, `${project.owner}/${project.name}`])));
+      }
+    });
+    return () => {
+      cancelled = true;
+    };
+  }, []);
+  return names;
+}
+
 export function HelperPage() {
   const toast = useToast();
+  const names = useProjectNames();
+  const focusId = new URLSearchParams(window.location.search).get("project");
   const [overview, setOverview] = useState<HelperOverview | null | undefined>(undefined);
   const [error, setError] = useState<string | null>(null);
   const [pairing, setPairing] = useState(false);
-  const [adding, setAdding] = useState(false);
   const [scanning, setScanning] = useState(false);
-  const [removingId, setRemovingId] = useState<string | null>(null);
 
   const reload = useCallback(async () => {
     const next = await readHelperOverview();
@@ -30,77 +60,49 @@ export function HelperPage() {
 
   useEffect(() => {
     void reload();
+    const timer = window.setInterval(() => void reload(), 5000);
+    return () => window.clearInterval(timer);
   }, [reload]);
+
+  async function run(action: () => Promise<void>, success: string, fallback: string): Promise<boolean> {
+    setError(null);
+    try {
+      await action();
+      await reload();
+      toast(success);
+      return true;
+    } catch (reason) {
+      setError(errorMessage(reason, fallback));
+      return false;
+    }
+  }
 
   async function pair(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
-    const data = new FormData(event.currentTarget);
+    const form = event.currentTarget;
+    const data = new FormData(form);
     const code = String(data.get("code") ?? "").trim();
     const apiUrl = String(data.get("apiUrl") ?? "").trim();
     setPairing(true);
-    setError(null);
-    try {
-      await pairLocalHelper(code, apiUrl);
-      await reload();
-      toast("Helper paired.");
-    } catch (reason) {
-      setError(errorMessage(reason, "Pairing failed."));
-    } finally {
-      setPairing(false);
-    }
-  }
-
-  async function addFolder(event: FormEvent<HTMLFormElement>) {
-    event.preventDefault();
-    const form = event.currentTarget;
-    const data = new FormData(form);
-    const path = String(data.get("path") ?? "").trim();
-    setAdding(true);
-    setError(null);
-    try {
-      await addHelperFolder(path);
+    if (await run(() => pairLocalHelper(code, apiUrl), "Project connected.", "Pairing failed.")) {
       form.reset();
-      await reload();
-      toast("Folder added.");
-    } catch (reason) {
-      setError(errorMessage(reason, "Could not add that folder."));
-    } finally {
-      setAdding(false);
     }
-  }
-
-  async function removeFolder(id: string) {
-    setRemovingId(id);
-    setError(null);
-    try {
-      await removeHelperFolder(id);
-      await reload();
-      toast("Folder removed.");
-    } catch (reason) {
-      setError(errorMessage(reason, "Could not remove that folder."));
-    } finally {
-      setRemovingId(null);
-    }
+    setPairing(false);
   }
 
   async function scan() {
     setScanning(true);
-    setError(null);
-    try {
-      await scanHelper();
-      await reload();
-      toast("Scan finished.");
-    } catch (reason) {
-      setError(errorMessage(reason, "Scan failed."));
-    } finally {
-      setScanning(false);
-    }
+    await run(scanHelper, "Scan finished.", "Scan failed.");
+    setScanning(false);
   }
 
-  const paired = overview?.pairing ?? null;
-  const needsPairing = !paired || overview?.status?.needsPairing === true;
-  const tone = !paired ? "bg-zinc-300" : overview?.status?.needsPairing ? "bg-amber-400" : "bg-emerald-500";
-  const title = !paired ? "Not connected" : overview?.status?.needsPairing ? "Connection expired" : "Connected";
+  const nameOf = (pairing: Pick<HelperPairing, "projectId" | "projectName">) =>
+    pairing.projectName ?? names.get(pairing.projectId) ?? `Project ${pairing.projectId.slice(0, 8)}`;
+  const pairings = overview
+    ? [...overview.pairings].sort((a, b) => Number(b.projectId === focusId) - Number(a.projectId === focusId))
+    : [];
+  const pairedIds = new Set(pairings.map((entry) => entry.projectId));
+  const orphanFolders = overview ? overview.folders.filter((folder) => folder.enabled && !pairedIds.has(folder.projectId)) : [];
 
   return (
     <div className="relative min-h-full">
@@ -117,7 +119,7 @@ export function HelperPage() {
             <p className="text-xs font-semibold tracking-wide text-zinc-500 uppercase">Automatic Project Map</p>
             <h1 className="mt-0.5 text-2xl font-semibold tracking-tight text-zinc-900">Local helper</h1>
             <p className="mt-1 text-sm leading-relaxed text-zinc-600">
-              Collects Codex, Claude Code, and Cursor sessions from folders you choose on this computer.
+              Collects Codex, Claude Code, and Cursor sessions on this computer. Each project collects from the folders you choose for it.
             </p>
           </div>
         </header>
@@ -136,72 +138,66 @@ export function HelperPage() {
           <ErrorNote>The helper is not running on this computer. Start it with npm run dev:helper.</ErrorNote>
         ) : (
           <div className="space-y-3.5">
-            <section className="rounded-2xl bg-white p-4 shadow-sm ring-1 ring-zinc-200">
-              <div className="flex items-start gap-3">
-                <span className={`mt-1.5 size-2.5 shrink-0 rounded-full ${tone}`} />
-                <div>
-                  <h2 className="text-sm font-semibold text-zinc-900">{title}</h2>
-                  {paired && !overview.status?.needsPairing ? (
-                    <p className="mt-1 text-sm leading-relaxed text-zinc-600">
-                      Paired to project <code className="font-mono text-xs text-zinc-700">{paired.projectId}</code>.
-                      <span className="mt-0.5 block">Tracking started {formatDateTime(paired.trackingStartedAt)}.</span>
-                    </p>
-                  ) : (
-                    <p className="mt-1 text-sm leading-relaxed text-zinc-600">
-                      {paired
-                        ? "The server no longer accepts this helper’s token. Connect it again from the web app, or paste a new code."
-                        : "Not paired yet. Use “Connect this computer” in the web app, or paste a pairing code here."}
-                    </p>
-                  )}
-                </div>
-              </div>
-              {needsPairing ? (
-                <form className="mt-4 space-y-3" onSubmit={(event) => void pair(event)}>
-                  <Field label="Pairing code">
-                    <input name="code" required autoComplete="one-time-code" spellCheck={false} placeholder="Paste the code from the web app" className={inputClass} />
-                  </Field>
-                  <Field label="API URL">
-                    <input name="apiUrl" required spellCheck={false} defaultValue={paired?.apiUrl ?? "http://127.0.0.1:4000"} className={inputClass} />
-                  </Field>
-                  <Button type="submit" variant="primary" loading={pairing}>
-                    Pair
-                  </Button>
-                </form>
-              ) : null}
-            </section>
+            {pairings.length === 0 ? (
+              <section className="rounded-2xl bg-white p-4 shadow-sm ring-1 ring-zinc-200">
+                <h2 className="text-sm font-semibold text-zinc-900">No projects yet</h2>
+                <p className="mt-1 text-sm leading-relaxed text-zinc-600">
+                  Open a project in the web app and use Settings → Local helper → “Connect this computer”, or paste a pairing code below.
+                </p>
+              </section>
+            ) : (
+              pairings.map((entry) => (
+                <ProjectCard
+                  key={entry.projectId}
+                  pairing={entry}
+                  name={nameOf(entry)}
+                  focused={entry.projectId === focusId}
+                  status={overview.status?.projects.find((project) => project.projectId === entry.projectId)}
+                  folders={overview.folders.filter((folder) => folder.enabled && folder.projectId === entry.projectId)}
+                  onAddFolder={(path) => run(() => addHelperFolder(entry.projectId, path), "Folder added.", "Could not add that folder.")}
+                  onRemoveFolder={(id) => run(() => removeHelperFolder(id), "Folder removed.", "Could not remove that folder.")}
+                  onDisconnect={() =>
+                    run(() => removeHelperPairing(entry.projectId), `${nameOf(entry)} disconnected from this computer.`, "Could not disconnect that project.")
+                  }
+                />
+              ))
+            )}
 
-            <section className="rounded-2xl bg-white p-4 shadow-sm ring-1 ring-zinc-200">
-              <h2 className="text-sm font-semibold text-zinc-900">Folders</h2>
-              <p className="mt-1 text-sm leading-relaxed text-zinc-600">Only sessions whose working folder is inside one of these folders are uploaded.</p>
-              {overview.folders.length === 0 ? (
-                <p className="mt-3 text-sm text-zinc-500">No folders yet. Add a project directory and only sessions inside it are uploaded.</p>
-              ) : (
+            {orphanFolders.length > 0 ? (
+              <section className="rounded-2xl bg-white p-4 shadow-sm ring-1 ring-amber-200">
+                <h2 className="text-sm font-semibold text-zinc-900">Not collecting</h2>
+                <p className="mt-1 text-sm leading-relaxed text-zinc-600">
+                  These folders belong to projects this computer is no longer connected to. Connect the project again to collect from them, or remove them.
+                </p>
                 <ul className="mt-3 divide-y divide-zinc-100 rounded-xl ring-1 ring-zinc-200">
-                  {overview.folders.map((folder) => (
-                    <li key={folder.id} className="flex items-center gap-3 px-3.5 py-2.5">
-                      <div className="min-w-0 flex-1">
-                        <p className="font-mono text-xs break-all text-zinc-700">{folder.canonicalPath}</p>
-                        {folder.enabled ? null : <p className="mt-0.5 text-xs text-zinc-500">Paused</p>}
-                      </div>
-                      <Button size="sm" variant="ghost" loading={removingId === folder.id} onClick={() => void removeFolder(folder.id)}>
-                        Remove
-                      </Button>
-                    </li>
+                  {orphanFolders.map((folder) => (
+                    <FolderRow
+                      key={folder.id}
+                      folder={folder}
+                      detail={names.get(folder.projectId) ?? `Project ${folder.projectId.slice(0, 8)}`}
+                      onRemove={() => run(() => removeHelperFolder(folder.id), "Folder removed.", "Could not remove that folder.")}
+                    />
                   ))}
                 </ul>
-              )}
-              {paired ? (
-                <form className="mt-4 space-y-3" onSubmit={(event) => void addFolder(event)}>
-                  <Field label="Folder path">
-                    <input name="path" required spellCheck={false} placeholder="/path/to/project" className={inputClass} />
-                  </Field>
-                  <Button type="submit" variant="primary" loading={adding}>
-                    Add folder
-                  </Button>
-                </form>
-              ) : (
-                <p className="mt-3 text-sm text-zinc-500">Pair this computer before choosing folders.</p>
-              )}
+              </section>
+            ) : null}
+
+            <section className="rounded-2xl bg-white p-4 shadow-sm ring-1 ring-zinc-200">
+              <h2 className="text-sm font-semibold text-zinc-900">Connect with a code</h2>
+              <p className="mt-1 text-sm leading-relaxed text-zinc-600">
+                If the web app could not reach this helper, it shows a pairing code. Paste it here. Projects already connected keep collecting.
+              </p>
+              <form className="mt-4 space-y-3" onSubmit={(event) => void pair(event)}>
+                <Field label="Pairing code">
+                  <input name="code" required autoComplete="one-time-code" spellCheck={false} placeholder="Paste the code from the web app" className={inputClass} />
+                </Field>
+                <Field label="API URL">
+                  <input name="apiUrl" required spellCheck={false} defaultValue={pairings[0]?.apiUrl ?? "http://127.0.0.1:4000"} className={inputClass} />
+                </Field>
+                <Button type="submit" variant="secondary" loading={pairing}>
+                  Connect
+                </Button>
+              </form>
             </section>
 
             <section className="rounded-2xl bg-white p-4 shadow-sm ring-1 ring-zinc-200">
@@ -231,7 +227,7 @@ export function HelperPage() {
                   ))}
                 </ul>
               )}
-              {overview.status ? <StatusRows status={overview.status} /> : null}
+              {overview.status ? <TotalRows status={overview.status} /> : null}
             </section>
           </div>
         )}
@@ -246,31 +242,102 @@ export function HelperPage() {
   );
 }
 
-function StatusRows({ status }: { status: NonNullable<HelperOverview["status"]> }) {
-  const rows: Array<[string, string]> = [
-    ["Last scan", status.lastScanAt ? formatDateTime(status.lastScanAt) : "Not yet"],
-    ["Last upload", status.lastUploadAt ? formatDateTime(status.lastUploadAt) : "Not yet"],
-    ["Waiting to upload", String(status.queued)],
-    ["Uploaded since start", String(status.uploaded)],
-    ["Dropped since start", String(status.dropped)],
-  ];
-  if (status.nextUploadAt) {
-    rows.push(["Next upload attempt", formatDateTime(status.nextUploadAt)]);
+function ProjectCard({
+  pairing,
+  name,
+  focused,
+  status,
+  folders,
+  onAddFolder,
+  onRemoveFolder,
+  onDisconnect,
+}: {
+  pairing: HelperPairing;
+  name: string;
+  focused: boolean;
+  status: HelperProjectStatus | undefined;
+  folders: HelperFolder[];
+  onAddFolder: (path: string) => Promise<boolean>;
+  onRemoveFolder: (id: string) => Promise<boolean>;
+  onDisconnect: () => Promise<boolean>;
+}) {
+  const [adding, setAdding] = useState(false);
+  const [removingId, setRemovingId] = useState<string | null>(null);
+  const [disconnecting, setDisconnecting] = useState(false);
+  const expired = status?.needsPairing === true;
+  const tone = expired ? "bg-amber-400" : folders.length === 0 ? "bg-amber-400" : "bg-emerald-500";
+  const summary = expired
+    ? "The server no longer accepts this computer for this project. Reconnect it from the project’s Settings → Local helper."
+    : folders.length === 0
+      ? "No folders yet, so no sessions are collected. Add the folder where you work on this project."
+      : `Collecting from ${folders.length} folder${folders.length === 1 ? "" : "s"} · last upload ${status?.lastUploadAt ? formatDateTime(status.lastUploadAt) : "not yet"}${status && status.queued > 0 ? ` · ${status.queued} waiting` : ""}`;
+
+  async function add(event: FormEvent<HTMLFormElement>) {
+    event.preventDefault();
+    const form = event.currentTarget;
+    const path = String(new FormData(form).get("path") ?? "").trim();
+    setAdding(true);
+    if (await onAddFolder(path)) {
+      form.reset();
+    }
+    setAdding(false);
   }
+
   return (
-    <>
-      <dl className="mt-4 divide-y divide-zinc-100 rounded-xl ring-1 ring-zinc-200">
-        {rows.map(([label, value]) => (
-          <div key={label} className="flex items-center justify-between gap-4 px-3.5 py-2.5">
-            <dt className="text-sm text-zinc-500">{label}</dt>
-            <dd className="text-right text-sm text-zinc-900">{value}</dd>
-          </div>
-        ))}
-      </dl>
-      {status.lastError ? (
-        <p className="mt-3 rounded-lg bg-rose-50 px-3 py-2 text-sm text-rose-700 ring-1 ring-rose-200 ring-inset">Last problem: {status.lastError}</p>
+    <section className={cx("rounded-2xl bg-white p-4 shadow-sm ring-1", focused ? "ring-2 ring-indigo-300" : "ring-zinc-200")}>
+      <div className="flex items-start gap-3">
+        <span className={cx("mt-1.5 size-2.5 shrink-0 rounded-full", tone)} />
+        <div className="min-w-0 flex-1">
+          <h2 className="truncate text-sm font-semibold text-zinc-900">{name}</h2>
+          <p className="mt-1 text-sm leading-relaxed text-zinc-600">{summary}</p>
+          <p className="mt-0.5 text-xs text-zinc-500">Sessions started after {formatDateTime(pairing.trackingStartedAt)} are collected.</p>
+          {status?.lastError && !expired ? <p className="mt-1 text-xs text-rose-600">{status.lastError}</p> : null}
+        </div>
+        <Button
+          size="sm"
+          variant="ghost"
+          loading={disconnecting}
+          onClick={() => {
+            setDisconnecting(true);
+            void onDisconnect().finally(() => setDisconnecting(false));
+          }}
+        >
+          Disconnect
+        </Button>
+      </div>
+
+      {folders.length > 0 ? (
+        <ul className="mt-3 divide-y divide-zinc-100 rounded-xl ring-1 ring-zinc-200">
+          {folders.map((folder) => (
+            <FolderRow
+              key={folder.id}
+              folder={folder}
+              removing={removingId === folder.id}
+              onRemove={() => {
+                setRemovingId(folder.id);
+                return onRemoveFolder(folder.id).finally(() => setRemovingId(null));
+              }}
+            />
+          ))}
+        </ul>
       ) : null}
-      {status.paused.length > 0 ? (
+
+      <form className="mt-3 flex gap-2" onSubmit={(event) => void add(event)}>
+        <input
+          name="path"
+          required
+          spellCheck={false}
+          placeholder="/path/to/your/clone"
+          aria-label={`Folder for ${name}`}
+          autoFocus={focused && folders.length === 0}
+          className={cx(inputClass, "font-mono text-xs")}
+        />
+        <Button type="submit" variant={folders.length === 0 ? "primary" : "secondary"} className="shrink-0" loading={adding}>
+          Add folder
+        </Button>
+      </form>
+
+      {status && status.paused.length > 0 ? (
         <div className="mt-3">
           <p className="text-sm text-zinc-600">Paused sessions. Their log file was replaced or shortened.</p>
           <ul className="mt-2 space-y-1.5">
@@ -284,6 +351,53 @@ function StatusRows({ status }: { status: NonNullable<HelperOverview["status"]> 
           </ul>
         </div>
       ) : null}
-    </>
+    </section>
+  );
+}
+
+function FolderRow({
+  folder,
+  detail,
+  removing = false,
+  onRemove,
+}: {
+  folder: HelperFolder;
+  detail?: string;
+  removing?: boolean;
+  onRemove: () => Promise<boolean>;
+}) {
+  return (
+    <li className="flex items-center gap-3 px-3.5 py-2.5">
+      <div className="min-w-0 flex-1">
+        <p className="font-mono text-xs break-all text-zinc-700">{folder.canonicalPath}</p>
+        {detail ? <p className="mt-0.5 text-xs text-zinc-500">{detail}</p> : null}
+      </div>
+      <Button size="sm" variant="ghost" loading={removing} onClick={() => void onRemove()}>
+        Remove
+      </Button>
+    </li>
+  );
+}
+
+function TotalRows({ status }: { status: HelperStatus }) {
+  const rows: Array<[string, string]> = [
+    ["Last scan", status.lastScanAt ? formatDateTime(status.lastScanAt) : "Not yet"],
+    ["Last upload", status.lastUploadAt ? formatDateTime(status.lastUploadAt) : "Not yet"],
+    ["Waiting to upload", String(status.queued)],
+    ["Uploaded since start", String(status.uploaded)],
+    ["Dropped since start", String(status.dropped)],
+  ];
+  if (status.nextUploadAt) {
+    rows.push(["Next upload attempt", formatDateTime(status.nextUploadAt)]);
+  }
+  return (
+    <dl className="mt-4 divide-y divide-zinc-100 rounded-xl ring-1 ring-zinc-200">
+      {rows.map(([label, value]) => (
+        <div key={label} className="flex items-center justify-between gap-4 px-3.5 py-2.5">
+          <dt className="text-sm text-zinc-500">{label}</dt>
+          <dd className="text-right text-sm text-zinc-900">{value}</dd>
+        </div>
+      ))}
+    </dl>
   );
 }

@@ -31,13 +31,13 @@ export async function createPairingCode(
 export async function exchangePairingCode(
   pool: Pool,
   input: { code: string; label?: string; now?: Date },
-): Promise<{ token: string; device: HelperDevice } | { error: "invalid_code" }> {
+): Promise<{ token: string; projectName: string; device: HelperDevice } | { error: "invalid_code" }> {
   const now = input.now ?? new Date();
   const client = await pool.connect();
   try {
     await client.query("begin");
-    const found = await client.query<{ project_id: string; user_id: string; tracking_started_at: Date }>(
-      `select c.project_id, c.user_id, p.tracking_started_at
+    const found = await client.query<{ project_id: string; user_id: string; tracking_started_at: Date; project_name: string }>(
+      `select c.project_id, c.user_id, p.tracking_started_at, p.github_owner || '/' || p.github_name as project_name
        from collector_pairing_codes c
        join projects p on p.id = c.project_id
        join memberships m on m.workspace_id = p.workspace_id and m.user_id = c.user_id
@@ -68,6 +68,7 @@ export async function exchangePairingCode(
     await client.query("commit");
     return {
       token,
+      projectName: row.project_name,
       device: {
         id,
         projectId: row.project_id,
