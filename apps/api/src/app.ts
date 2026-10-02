@@ -217,11 +217,7 @@ export function createApp(deps: AppDeps) {
     }
     const result = await connectRepository(deps.pool, { userId: user.id, owner: parsed.data.owner, name: parsed.data.name, repoId });
     if ("error" in result) {
-      const message =
-        result.error === "repo_taken"
-          ? "This repository is already connected."
-          : "You already own a connected repository.";
-      res.status(409).json({ error: message });
+      res.status(409).json({ error: "This repository is already connected." });
       return;
     }
     res.status(201).json(

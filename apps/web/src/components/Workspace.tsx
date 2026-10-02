@@ -63,8 +63,7 @@ export function Workspace({
   onJoined: (projectId: string) => void;
   onSignOut: () => void;
   onProjectGone: () => void;
-  /** Set when the person does not own a connected repository yet. */
-  onConnectRepository?: (() => void) | undefined;
+  onConnectRepository: () => void;
 }) {
   const toast = useToast();
   const now = useNow();
@@ -387,7 +386,7 @@ export function Workspace({
               </button>
             )}
             items={[
-              ...(onConnectRepository ? [{ label: "Connect your own repository", icon: <Plus className="size-4" />, onSelect: onConnectRepository }] : []),
+              { label: "Connect another repository", icon: <Plus className="size-4" />, onSelect: onConnectRepository },
               { label: `Sign out${me.githubLogin ? ` @${me.githubLogin}` : ""}`, icon: <LogOut className="size-4" />, onSelect: onSignOut },
             ]}
           />

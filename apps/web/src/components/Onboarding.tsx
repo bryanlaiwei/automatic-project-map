@@ -83,7 +83,7 @@ export function Onboarding({
             Back to the map
           </button>
         ) : null}
-        <h1 className="text-2xl font-semibold tracking-tight text-zinc-900">{onCancel ? "Connect your own repository" : "Set up your project map"}</h1>
+        <h1 className="text-2xl font-semibold tracking-tight text-zinc-900">{onCancel ? "Connect another repository" : "Set up your project map"}</h1>
         <p className="mt-2 text-[15px] text-zinc-600">
           {onCancel
             ? "It gets its own map. The projects you were invited to stay as they are."
