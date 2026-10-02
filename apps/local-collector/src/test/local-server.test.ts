@@ -1,4 +1,4 @@
-import { mkdtempSync, realpathSync, rmSync } from "node:fs";
+import { mkdirSync, mkdtempSync, realpathSync, rmSync } from "node:fs";
 import { request } from "node:http";
 import type { AddressInfo } from "node:net";
 import { tmpdir } from "node:os";
@@ -65,7 +65,7 @@ describe("local helper api", () => {
     });
     expect(pair.status).toBe(201);
     expect(pair.headers.get("access-control-allow-origin")).toBe("http://127.0.0.1:5173");
-    expect(helper.db.getPairing()?.deviceId).toBe("device-web");
+    expect(helper.db.pairing(projectId)?.deviceId).toBe("device-web");
 
     const outside = await fetch(`${helper.base}/folders`, {
       method: "POST",
@@ -75,9 +75,9 @@ describe("local helper api", () => {
     expect(outside.status).toBe(401);
 
     const visit = await fetch(helper.base, { headers: { Origin: "http://127.0.0.1:5173" } });
-    const overview = (await visit.json()) as { pairing: { projectId: string }; logRoots: Array<{ path: string }> };
+    const overview = (await visit.json()) as { pairings: Array<{ projectId: string }>; logRoots: Array<{ path: string }> };
     expect(visit.headers.get("content-type")).toContain("application/json");
-    expect(overview.pairing.projectId).toBe(projectId);
+    expect(overview.pairings.map((entry) => entry.projectId)).toEqual([projectId]);
     expect(overview.logRoots.map((rootEntry) => rootEntry.path)).toContain(join(root, "codex"));
 
     const added = await fetch(`${helper.base}/folders`, {
@@ -143,8 +143,8 @@ describe("local helper", () => {
     }
     const base = `http://127.0.0.1:${address.port}`;
     const page = await fetch(base);
-    const overview = (await page.json()) as { pairing: null };
-    expect(overview.pairing).toBeNull();
+    const overview = (await page.json()) as { pairings: unknown[] };
+    expect(overview.pairings).toEqual([]);
     const denied = await fetch(`${base}/pair`, {
       method: "POST",
       headers: { Origin: "https://evil.example", "Content-Type": "application/json" },
@@ -158,8 +158,67 @@ describe("local helper", () => {
       body: JSON.stringify({ code: "abc", apiUrl: "http://127.0.0.1:4000" }),
     });
     expect(accepted.status).toBe(201);
-    expect(db.getPairing()?.projectId).toBe(projectId);
-    expect(db.getPairing()?.deviceToken).toBe("apm_test");
+    expect(db.pairing(projectId)?.deviceToken).toBe("apm_test");
+    server.close();
+    db.close();
+  });
+
+  it("stays paired with every project, keeps each project's folders apart, and disconnects one at a time", async () => {
+    const root = tempRoot();
+    const db = openDb(root);
+    const otherProject = "44444444-4444-4444-8444-444444444444";
+    const calls: Array<{ url: string; method: string; auth: string | null }> = [];
+    const codes: Record<string, { projectId: string; projectName: string; token: string; deviceId: string }> = {
+      first: { projectId, projectName: "acme/first", token: "apm_first", deviceId: "device-first" },
+      other: { projectId: otherProject, projectName: "acme/other", token: "apm_other", deviceId: "device-other" },
+      again: { projectId, projectName: "acme/first", token: "apm_again", deviceId: "device-again" },
+    };
+    const server = await startLocalServer({
+      db,
+      port: 0,
+      webOrigin: "http://127.0.0.1:5173",
+      fetchImpl: async (input, init) => {
+        const url = String(input);
+        calls.push({ url, method: init?.method ?? "GET", auth: new Headers(init?.headers).get("authorization") });
+        if (url.endsWith("/helper/token")) {
+          return new Response(null, { status: 204 });
+        }
+        const code = codes[(JSON.parse(String(init?.body)) as { code: string }).code];
+        return new Response(JSON.stringify({ ...code, trackingStartedAt }), { status: 201, headers: { "Content-Type": "application/json" } });
+      },
+    });
+    const base = `http://127.0.0.1:${(server.address() as AddressInfo).port}`;
+    const web = { Origin: "http://127.0.0.1:5173", "Content-Type": "application/json" };
+    const post = (path: string, body: unknown) => fetch(`${base}${path}`, { method: "POST", headers: web, body: JSON.stringify(body) });
+
+    expect((await post("/pair", { code: "first", apiUrl: "http://api.test" })).status).toBe(201);
+    expect((await post("/pair", { code: "other", apiUrl: "http://api.test" })).status).toBe(201);
+    expect(db.pairings().map((entry) => [entry.projectName, entry.deviceToken])).toEqual([
+      ["acme/first", "apm_first"],
+      ["acme/other", "apm_other"],
+    ]);
+
+    const outer = join(root, "work");
+    const inner = join(outer, "inner");
+    mkdirSync(inner, { recursive: true });
+    expect((await post("/folders", { path: outer })).status).toBe(400);
+    expect((await post("/folders", { path: outer, projectId: "55555555-5555-4555-8555-555555555555" })).status).toBe(409);
+    expect((await post("/folders", { path: outer, projectId })).status).toBe(201);
+    const clash = await post("/folders", { path: inner, projectId: otherProject });
+    expect(clash.status).toBe(409);
+    expect(((await clash.json()) as { error: string }).error).toContain("acme/first");
+
+    expect((await post("/pair", { code: "again", apiUrl: "http://api.test" })).status).toBe(201);
+    expect(db.pairing(projectId)?.deviceToken).toBe("apm_again");
+    await new Promise((resolve) => setImmediate(resolve));
+    expect(calls).toContainEqual({ url: "http://api.test/helper/token", method: "DELETE", auth: "Bearer apm_first" });
+
+    expect((await post(`/pairings/${projectId}/remove`, {})).status).toBe(204);
+    await new Promise((resolve) => setImmediate(resolve));
+    expect(calls).toContainEqual({ url: "http://api.test/helper/token", method: "DELETE", auth: "Bearer apm_again" });
+    expect(db.pairings().map((entry) => entry.projectId)).toEqual([otherProject]);
+    expect(db.folders()).toEqual([]);
+    expect((await post("/folders", { path: inner })).status).toBe(201);
     server.close();
     db.close();
   });

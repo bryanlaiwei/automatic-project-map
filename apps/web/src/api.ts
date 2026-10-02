@@ -183,6 +183,22 @@ export type Correction =
 
 export type NodePosition = { nodeId: string; x: number; y: number };
 
+export type HelperPausedSession = { provider: string; sessionId: string; reason: string | null };
+
+/** How the helper on this computer is doing for one project. */
+export type HelperProjectStatus = {
+  projectId: string;
+  projectName: string | null;
+  trackingStartedAt: string;
+  needsPairing: boolean;
+  selectedFolders: number;
+  lastUploadAt: string | null;
+  queued: number;
+  paused: HelperPausedSession[];
+  lastError: string | null;
+  nextUploadAt: string | null;
+};
+
 export type HelperStatus = {
   paired: boolean;
   needsPairing: boolean;
@@ -190,7 +206,12 @@ export type HelperStatus = {
   lastScanAt: string | null;
   lastUploadAt: string | null;
   queued: number;
+  uploaded: number;
+  dropped: number;
+  paused: HelperPausedSession[];
   lastError: string | null;
+  nextUploadAt: string | null;
+  projects: HelperProjectStatus[];
 };
 
 const apiUrl = import.meta.env.VITE_API_URL || "http://127.0.0.1:4000";
@@ -273,18 +294,14 @@ export const api = {
     request<{ code: string; expiresAt: string }>(`/projects/${projectId}/helper/pairing-codes`, token, { method: "POST" }),
 };
 
-export type HelperFolder = { id: string; canonicalPath: string; enabled: boolean };
+export type HelperFolder = { id: string; projectId: string; canonicalPath: string; enabled: boolean };
 export type HelperLogRoot = { id: string; path: string };
+export type HelperPairing = { projectId: string; projectName: string | null; trackingStartedAt: string; apiUrl: string };
 export type HelperOverview = {
-  pairing: { projectId: string; trackingStartedAt: string; apiUrl: string } | null;
+  pairings: HelperPairing[];
   folders: HelperFolder[];
   logRoots: HelperLogRoot[];
-  status: (HelperStatus & {
-    uploaded: number;
-    dropped: number;
-    paused: Array<{ provider: string; sessionId: string; reason: string | null }>;
-    nextUploadAt: string | null;
-  }) | null;
+  status: HelperStatus | null;
 };
 
 async function helperRequest(path: string, init: RequestInit | undefined, fallback: string): Promise<Response> {
@@ -319,8 +336,13 @@ export async function readHelperOverview(): Promise<HelperOverview | null> {
   }
 }
 
-export async function addHelperFolder(path: string): Promise<void> {
-  await helperRequest("/folders", { method: "POST", body: JSON.stringify({ path }) }, "Could not add that folder.");
+export async function addHelperFolder(projectId: string, path: string): Promise<void> {
+  await helperRequest("/folders", { method: "POST", body: JSON.stringify({ projectId, path }) }, "Could not add that folder.");
+}
+
+/** Stops this computer collecting for one project. Other projects keep collecting. */
+export async function removeHelperPairing(projectId: string): Promise<void> {
+  await helperRequest(`/pairings/${encodeURIComponent(projectId)}/remove`, { method: "POST", body: "{}" }, "Could not disconnect that project.");
 }
 
 export async function removeHelperFolder(id: string): Promise<void> {
