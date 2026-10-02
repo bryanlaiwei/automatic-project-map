@@ -131,7 +131,6 @@ function AppContent() {
       />
     );
   }
-  const ownsRepository = account.projects.some((entry) => entry.role === "owner" && entry.repoId > 0);
   return (
     <Workspace
       key={project.id}
@@ -144,7 +143,7 @@ function AppContent() {
       onJoined={openProject}
       onSignOut={() => void signOut()}
       onProjectGone={projectGone}
-      onConnectRepository={ownsRepository ? undefined : () => setConnecting(true)}
+      onConnectRepository={() => setConnecting(true)}
     />
   );
 }

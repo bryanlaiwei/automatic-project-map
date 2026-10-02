@@ -144,17 +144,20 @@ describe("membership, settings and layout", () => {
     expect((await call("renamed", `/invitations/${invitationId}/accept`, { method: "POST" })).status).toBe(201);
   });
 
-  it("lets an invited member connect a repository of their own, but nobody own two", async () => {
+  it("lets a person own several repositories, but connects each repository only once", async () => {
     const own = await call("renamed", "/projects", { method: "POST", body: JSON.stringify({ owner: "day4", name: "own" }) });
     expect(own.status).toBe(201);
+    const second = await call("renamed", "/projects", { method: "POST", body: JSON.stringify({ owner: "day4", name: "second" }) });
+    expect(second.status).toBe(201);
     const listed = (await (await call("renamed", "/projects")).json()) as { projects: Array<{ name: string; role: string }> };
     expect(listed.projects.map((project) => [project.name, project.role]).sort()).toEqual([
       ["own", "owner"],
+      ["second", "owner"],
       ["team", "member"],
     ]);
-    const second = await call("renamed", "/projects", { method: "POST", body: JSON.stringify({ owner: "day4", name: "second" }) });
-    expect(second.status).toBe(409);
-    expect((await call("owner", "/projects", { method: "POST", body: JSON.stringify({ owner: "day4", name: "second" }) })).status).toBe(409);
+    const taken = await call("owner", "/projects", { method: "POST", body: JSON.stringify({ owner: "day4", name: "second" }) });
+    expect(taken.status).toBe(409);
+    expect(await taken.json()).toEqual({ error: "This repository is already connected." });
   });
 
   it("revokes an open invitation", async () => {

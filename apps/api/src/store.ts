@@ -35,24 +35,10 @@ type DeliveryRow = {
 export async function connectRepository(
   pool: Pool,
   input: { userId: string; owner: string; name: string; repoId: number },
-): Promise<{ project: ProjectRow } | { error: "already_connected" | "repo_taken" }> {
+): Promise<{ project: ProjectRow } | { error: "repo_taken" }> {
   const client = await pool.connect();
   try {
     await client.query("begin");
-    // Each person owns at most one connected repository; being invited to someone else's does not count,
-    // and neither does the demo project, whose repository id is negative.
-    const existing = await client.query<ProjectRow>(
-      `select p.*
-       from projects p
-       join memberships m on m.workspace_id = p.workspace_id
-       where m.user_id = $1 and m.role = 'owner' and p.github_repo_id > 0`,
-      [input.userId],
-    );
-    if ((existing.rowCount ?? 0) > 0) {
-      await client.query("rollback");
-      return { error: "already_connected" };
-    }
-
     const claimed = await client.query(`select 1 from projects where github_repo_id = $1`, [input.repoId]);
     if ((claimed.rowCount ?? 0) > 0) {
       await client.query("rollback");
