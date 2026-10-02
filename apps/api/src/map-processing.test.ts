@@ -893,16 +893,19 @@ describe("interpretation and map maintenance", () => {
     );
     expect(pullState.rows[0]?.merged).toBe(true);
 
-    const holder = await pool.connect();
+    await pool.query(`update projects set locked_until = now() + interval '5 minutes' where id = $1`, [project.id]);
     try {
-      await holder.query(`select pg_advisory_lock(hashtextextended($1, 0))`, [`apm:project:${project.id}`]);
       await pullRequest(project, { id: 9962, number: 42, title: "Search results page", second: 30 });
       const blocked = await run(project, ai);
       expect(blocked).toMatchObject({ busy: true, interpretations: [] });
       expect(blocked.facts).toMatchObject([{ applied: 1 }]);
+      const stillHeld = await pool.query<{ held: boolean }>(
+        `select locked_until > now() as held from projects where id = $1`,
+        [project.id],
+      );
+      expect(stillHeld.rows[0]?.held).toBe(true);
     } finally {
-      await holder.query(`select pg_advisory_unlock(hashtextextended($1, 0))`, [`apm:project:${project.id}`]);
-      holder.release();
+      await pool.query(`update projects set locked_until = null where id = $1`, [project.id]);
     }
   });
 
