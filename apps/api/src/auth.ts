@@ -1,4 +1,4 @@
-import { jwtVerify, type JWTVerifyOptions } from "jose";
+import { createRemoteJWKSet, decodeProtectedHeader, jwtVerify, type JWTPayload, type JWTVerifyGetKey, type JWTVerifyOptions } from "jose";
 import type { Pool } from "pg";
 
 export type AuthUser = {
@@ -26,18 +26,36 @@ export async function verifySupabaseUser(token: string, pool: Pool): Promise<Aut
   return { id, ...github };
 }
 
+const signingKeyAlgorithms = ["ES256", "RS256"];
+const signingKeySets = new Map<string, JWTVerifyGetKey>();
+
+/**
+ * Supabase signs access tokens either with the shared JWT secret (HS256) or with an asymmetric signing key
+ * whose public half it publishes as a JWKS. Newer projects, and the local CLI, use signing keys.
+ */
 async function supabaseUserId(token: string): Promise<string | null> {
-  const secret = process.env.SUPABASE_JWT_SECRET;
-  if (!secret || token === "") {
+  if (token === "") {
     return null;
   }
   const url = process.env.SUPABASE_URL?.replace(/\/$/, "");
-  const options: JWTVerifyOptions = { algorithms: ["HS256"], audience: "authenticated" };
+  const secret = process.env.SUPABASE_JWT_SECRET;
+  const options: JWTVerifyOptions = { audience: "authenticated" };
   if (url) {
     options.issuer = `${url}/auth/v1`;
   }
   try {
-    const { payload } = await jwtVerify(token, new TextEncoder().encode(secret), options);
+    let payload: JWTPayload;
+    if (decodeProtectedHeader(token).alg === "HS256") {
+      if (!secret) {
+        return null;
+      }
+      ({ payload } = await jwtVerify(token, new TextEncoder().encode(secret), { ...options, algorithms: ["HS256"] }));
+    } else {
+      if (!url) {
+        return null;
+      }
+      ({ payload } = await jwtVerify(token, signingKeySet(url), { ...options, algorithms: signingKeyAlgorithms }));
+    }
     if (payload.role !== "authenticated" || typeof payload.sub !== "string" || !userIdPattern.test(payload.sub)) {
       return null;
     }
@@ -45,6 +63,16 @@ async function supabaseUserId(token: string): Promise<string | null> {
   } catch {
     return null;
   }
+}
+
+/** Fetched on first use and cached by jose, which refetches when a token names a key it has not seen. */
+function signingKeySet(url: string): JWTVerifyGetKey {
+  let keys = signingKeySets.get(url);
+  if (!keys) {
+    keys = createRemoteJWKSet(new URL(`${url}/auth/v1/.well-known/jwks.json`));
+    signingKeySets.set(url, keys);
+  }
+  return keys;
 }
 
 async function githubAccount(pool: Pool, userId: string): Promise<Pick<AuthUser, "githubLogin" | "githubId" | "name" | "avatarUrl">> {
