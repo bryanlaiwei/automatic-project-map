@@ -406,6 +406,32 @@ describe("interpretation and map maintenance", () => {
     expect((await onlyWorkItems(project)).items).toHaveLength(3);
   });
 
+  it("turns each session message into evidence once, even when an upload repeats it", async () => {
+    const project = await newProject("message-keys", 19);
+    const ask = { id: "keys-1", role: "user" as const, text: "Add rate limiting to the login endpoint", occurredAt: project.at(10) };
+    const reply = { id: "keys-2", role: "assistant" as const, text: "Added a per-IP limiter in front of POST /login.", occurredAt: project.at(11) };
+    const followUp = { id: "keys-3", role: "user" as const, text: "Also return Retry-After when it blocks", occurredAt: project.at(12) };
+
+    await sessionContent(project, "codex", "codex-keys", [ask, reply, ask], "content:first");
+    const first = await run(project, null);
+    expect(first.facts[0]).toMatchObject({ applied: 2, evidenceCreated: 1 });
+
+    await sessionContent(project, "codex", "codex-keys", [ask, reply, followUp], "content:second");
+    const second = await run(project, null);
+    expect(second.facts[0]).toMatchObject({ applied: 1, evidenceCreated: 1 });
+
+    const evidence = await pool.query<{ excerpt: string }>(
+      `select excerpt from evidence where project_id = $1 order by created_at, part`,
+      [project.id],
+    );
+    expect(evidence.rows).toHaveLength(2);
+    expect(evidence.rows[0]?.excerpt.split(ask.text)).toHaveLength(2);
+    expect(evidence.rows[1]?.excerpt).toContain(followUp.text);
+    expect(evidence.rows[1]?.excerpt).not.toContain(ask.text);
+    const keys = await pool.query(`select 1 from session_record_keys where project_id = $1`, [project.id]);
+    expect(keys.rowCount).toBe(3);
+  });
+
   it("finishes duplicate, re-read and irrelevant input without new nodes or a revision bump", async () => {
     const project = await newProject("no-change", 3);
     const ai = new ScriptedInterpreter();
