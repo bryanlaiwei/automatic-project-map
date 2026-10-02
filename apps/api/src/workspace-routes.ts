@@ -1,8 +1,20 @@
 import { Router, type Request, type Response } from "express";
 import type { Pool } from "pg";
 import { z } from "zod";
-import type { AuthUser } from "./auth.js";
 import type { GithubAccountLookup } from "@apm/github-collector/access";
+import type { AuthUser } from "@apm/core/auth-user";
+import { config } from "@apm/core/config";
+import { deleteModelCredential, readModelCredential, readStoredModelKey, resolvedModel, saveModelCredential } from "@apm/core/model-credentials";
+import {
+  checkModelKey,
+  isModelProviderId,
+  listSupplierModels,
+  modelIdPattern,
+  modelProviders,
+  type ListSupplierModels,
+  type ModelKeyCheck,
+} from "@apm/core/model-providers";
+import { modelSecretsConfigured, ModelSecretsError } from "@apm/core/secret-box";
 import {
   acceptInvitation,
   deleteProject,
@@ -18,18 +30,9 @@ import {
   saveLayout,
   saveProfile,
   type Role,
-} from "./workspace.js";
-import { deleteModelCredential, readModelCredential, readStoredModelKey, resolvedModel, saveModelCredential } from "./model-credentials.js";
-import {
-  checkModelKey,
-  isModelProviderId,
-  listSupplierModels,
-  modelIdPattern,
-  modelProviders,
-  type ListSupplierModels,
-  type ModelKeyCheck,
-} from "./model-providers.js";
-import { modelSecretsConfigured, ModelSecretsError } from "./secret-box.js";
+} from "@apm/core/workspace";
+import { meSchema, modelSetupSchema } from "@apm/shared";
+import { accessFrom, requireAccess } from "./require-access.js";
 
 export type MemberAccess = (req: Request, res: Response) => Promise<{ user: AuthUser; projectId: string; role: Role } | null>;
 
@@ -68,15 +71,8 @@ export function workspaceRouter(input: {
   const { pool, authenticate, member, lookupGithubAccount } = input;
   const verifyModelKey = input.checkModelKey ?? checkModelKey;
   const listModels = input.listSupplierModels ?? listSupplierModels;
-
-  async function owner(req: Request, res: Response) {
-    const allowed = await member(req, res);
-    if (allowed && allowed.role !== "owner") {
-      res.status(403).json({ error: "Only project owners can do that." });
-      return null;
-    }
-    return allowed;
-  }
+  const asMember = requireAccess(member);
+  const asOwner = requireAccess(member, "owner");
 
   router.get("/me", async (req, res) => {
     const user = await authenticate(req, res);
@@ -84,10 +80,12 @@ export function workspaceRouter(input: {
       return;
     }
     await saveProfile(pool, user);
-    res.json({
-      user: { id: user.id, githubLogin: user.githubLogin ?? null, name: user.name ?? null, avatarUrl: user.avatarUrl ?? null },
-      invitations: await listPendingInvitations(pool, user),
-    });
+    res.json(
+      meSchema.parse({
+        user: { id: user.id, githubLogin: user.githubLogin ?? null, name: user.name ?? null, avatarUrl: user.avatarUrl ?? null },
+        invitations: await listPendingInvitations(pool, user),
+      }),
+    );
   });
 
   router.get("/me/model", async (req, res) => {
@@ -95,16 +93,18 @@ export function workspaceRouter(input: {
     if (!user) {
       return;
     }
-    res.json({
-      credential: await readModelCredential(pool, user.id),
-      serverFallback: Boolean(process.env.OPENAI_API_KEY?.trim()),
-      providers: modelProviders.map((provider) => ({
-        id: provider.id,
-        label: provider.label,
-        defaultModel: provider.defaultModel,
-        keyHint: provider.keyHint,
-      })),
-    });
+    res.json(
+      modelSetupSchema.parse({
+        credential: await readModelCredential(pool, user.id),
+        serverFallback: Boolean(config().openAiApiKey),
+        providers: modelProviders.map((provider) => ({
+          id: provider.id,
+          label: provider.label,
+          defaultModel: provider.defaultModel,
+          keyHint: provider.keyHint,
+        })),
+      }),
+    );
   });
 
   router.put("/me/model", async (req, res) => {
@@ -228,19 +228,13 @@ export function workspaceRouter(input: {
     }
   });
 
-  router.get("/projects/:projectId/settings", async (req, res) => {
-    const allowed = await member(req, res);
-    if (!allowed) {
-      return;
-    }
+  router.get("/projects/:projectId/settings", asMember, async (req, res) => {
+    const allowed = accessFrom(res);
     res.json(await readSettings(pool, { projectId: allowed.projectId, userId: allowed.user.id, role: allowed.role }));
   });
 
-  router.post("/projects/:projectId/invitations", async (req, res) => {
-    const allowed = await owner(req, res);
-    if (!allowed) {
-      return;
-    }
+  router.post("/projects/:projectId/invitations", asOwner, async (req, res) => {
+    const allowed = accessFrom(res);
     const parsed = inviteBody.safeParse(req.body);
     if (!parsed.success) {
       res.status(400).json({ error: "Enter a GitHub username." });
@@ -289,21 +283,15 @@ export function workspaceRouter(input: {
     }
   });
 
-  router.delete("/projects/:projectId/invitations/:invitationId", async (req, res) => {
-    const allowed = await owner(req, res);
-    if (!allowed) {
-      return;
-    }
+  router.delete("/projects/:projectId/invitations/:invitationId", asOwner, async (req, res) => {
+    const allowed = accessFrom(res);
     const id = uuid.safeParse(req.params.invitationId);
     const revoked = id.success && (await revokeInvitation(pool, { projectId: allowed.projectId, invitationId: id.data }));
     res.status(revoked ? 204 : 404).end();
   });
 
-  router.delete("/projects/:projectId/members/:userId", async (req, res) => {
-    const allowed = await member(req, res);
-    if (!allowed) {
-      return;
-    }
+  router.delete("/projects/:projectId/members/:userId", asMember, async (req, res) => {
+    const allowed = accessFrom(res);
     const id = uuid.safeParse(req.params.userId);
     if (!id.success) {
       res.status(404).json({ error: "Member not found." });
@@ -331,11 +319,8 @@ export function workspaceRouter(input: {
     }
   });
 
-  router.delete("/projects/:projectId/devices/:deviceId", async (req, res) => {
-    const allowed = await member(req, res);
-    if (!allowed) {
-      return;
-    }
+  router.delete("/projects/:projectId/devices/:deviceId", asMember, async (req, res) => {
+    const allowed = accessFrom(res);
     const id = uuid.safeParse(req.params.deviceId);
     const result = id.success
       ? await revokeDevice(pool, { projectId: allowed.projectId, deviceId: id.data, userId: allowed.user.id, role: allowed.role })
@@ -357,28 +342,19 @@ export function workspaceRouter(input: {
     }
   });
 
-  router.delete("/projects/:projectId", async (req, res) => {
-    const allowed = await owner(req, res);
-    if (!allowed) {
-      return;
-    }
+  router.delete("/projects/:projectId", asOwner, async (req, res) => {
+    const allowed = accessFrom(res);
     await deleteProject(pool, allowed.projectId);
     res.status(204).end();
   });
 
-  router.get("/projects/:projectId/layout", async (req, res) => {
-    const allowed = await member(req, res);
-    if (!allowed) {
-      return;
-    }
+  router.get("/projects/:projectId/layout", asMember, async (req, res) => {
+    const allowed = accessFrom(res);
     res.json({ positions: await readLayout(pool, allowed.projectId) });
   });
 
-  router.put("/projects/:projectId/layout", async (req, res) => {
-    const allowed = await member(req, res);
-    if (!allowed) {
-      return;
-    }
+  router.put("/projects/:projectId/layout", asMember, async (req, res) => {
+    const allowed = accessFrom(res);
     const parsed = layoutBody.safeParse(req.body);
     if (!parsed.success) {
       res.status(400).json({ error: "Layout positions are invalid." });

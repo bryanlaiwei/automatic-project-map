@@ -10,7 +10,7 @@
     "test": "vitest run"
   },
   "dependencies": {
-    "@apm/api": "*",
+    "@apm/core": "*",
     "@apm/github-collector": "*",
     "@apm/shared": "*",
     "pg-boss": "^10.3.2"

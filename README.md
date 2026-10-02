@@ -9,8 +9,9 @@ This repository is the local pilot from the MVP plan: a TypeScript npm workspace
 | Path | Role |
 |---|---|
 | `apps/web` | React, Vite, and Tailwind |
-| `apps/api` | Express API |
+| `apps/api` | Express HTTP routes |
 | `apps/worker` | pg-boss background jobs |
+| `packages/core` | Database, map processing, and other logic shared by the API and the worker |
 | `apps/local-collector` | Local helper, SQLite checkpoints and upload queue |
 | `apps/github-collector` | GitHub webhook normalization, enrichment, and refresh |
 | `packages/shared` | Shared schemas and types |

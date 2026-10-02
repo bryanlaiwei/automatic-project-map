@@ -3,14 +3,14 @@ import type { Server } from "node:http";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import type { RepositoryAccess } from "@apm/github-collector/access";
 import { snapshotFromPullRequest, snapshotFromWorkflow } from "@apm/github-collector/enrich";
-import { loadEnvFile } from "./env.js";
+import { loadEnvFile } from "@apm/core/config";
 
 loadEnvFile();
 
 const { createApp } = await import("./app.js");
-const { getPool } = await import("./db.js");
+const { getPool } = await import("@apm/core/db");
 const { refreshObservedGithub } = await import("@apm/github-collector/refresh");
-const { deliveryAttemptLimit, insertEvents, processQueuedDeliveries } = await import("./store.js");
+const { deliveryAttemptLimit, insertEvents, processQueuedDeliveries } = await import("@apm/core/store");
 
 const userId = "77777777-7777-4777-8777-777777777777";
 const secret = "test-webhook-secret";

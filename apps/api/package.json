@@ -2,32 +2,22 @@
   "name": "@apm/api",
   "version": "0.0.0",
   "private": true,
-  "exports": {
-    "./env": "./src/env.ts",
-    "./db": "./src/db.ts",
-    "./store": "./src/store.ts",
-    "./delivery-jobs": "./src/delivery-jobs.ts",
-    "./graph/process": "./src/graph/process.ts",
-    "./graph/openai-interpreter": "./src/graph/openai-interpreter.ts",
-    "./model-credentials": "./src/model-credentials.ts"
-  },
   "type": "module",
   "scripts": {
     "dev": "tsx watch src/index.ts",
     "start": "tsx src/index.ts",
     "typecheck": "tsc --noEmit",
     "test": "vitest run",
-    "eval": "tsx src/graph/eval-grouping.ts",
-    "demo:seed": "tsx src/demo/seed-demo.ts"
+    "eval": "tsx ../../packages/core/src/graph/eval-grouping.ts",
+    "demo:seed": "tsx ../../packages/core/src/demo/seed-demo.ts"
   },
   "dependencies": {
+    "@apm/core": "*",
     "@apm/github-collector": "*",
     "@apm/shared": "*",
     "express": "^5.1.0",
     "jose": "^6.2.12",
-    "openai": "^7.23.0",
     "pg": "^8.16.3",
-    "pg-boss": "^10.4.2",
     "zod": "^4.1.11"
   },
   "devDependencies": {

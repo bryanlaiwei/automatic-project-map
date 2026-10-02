@@ -2,11 +2,11 @@ import type { Server } from "node:http";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { createApp } from "./app.js";
 import type { AuthUser } from "./auth.js";
-import { getPool } from "./db.js";
-import { loadEnvFile } from "./env.js";
-import { resolveProjectInterpreter } from "./model-credentials.js";
-import { openAiInterpreterFromEnv } from "./graph/openai-interpreter.js";
-import { ciphertextBuffer, openModelKey } from "./secret-box.js";
+import { getPool } from "@apm/core/db";
+import { loadEnvFile } from "@apm/core/config";
+import { resolveProjectInterpreter } from "@apm/core/model-credentials";
+import { openAiInterpreterFromEnv } from "@apm/core/graph/openai-interpreter";
+import { ciphertextBuffer, openModelKey } from "@apm/core/secret-box";
 
 loadEnvFile();
 if (!process.env.APM_SECRETS_KEY?.trim()) {

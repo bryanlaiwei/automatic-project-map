@@ -1,26 +1,9 @@
 import type { Pool, PoolClient } from "pg";
-import { z } from "zod";
+import { correctionSchema, type Correction } from "@apm/shared";
+import { inTransaction } from "../db.js";
 import { ChangeSet, commitChanges, lockProject, recomputeWorkItemStates, resolveAlias } from "./graph-store.js";
-import { inTransaction } from "./process.js";
 
-const id = z.string().uuid();
-const title = z.string().trim().min(1).max(120);
-
-export const correctionSchema = z.discriminatedUnion("kind", [
-  z.object({ kind: z.literal("rename"), target: z.enum(["feature", "work_item"]), id, title }),
-  z.object({ kind: z.literal("move"), workItemId: id, featureId: id }),
-  z.object({ kind: z.literal("merge"), target: z.enum(["feature", "work_item"]), retiredId: id, survivingId: id }),
-  z.object({
-    kind: z.literal("split"),
-    workItemId: id,
-    title,
-    evidenceIds: z.array(id).default([]),
-    artifactIds: z.array(id).default([]),
-  }),
-  z.object({ kind: z.literal("dismiss"), relationshipId: id }),
-]);
-
-export type Correction = z.infer<typeof correctionSchema>;
+export { correctionSchema, type Correction };
 
 export type CorrectionResult =
   | { status: "applied"; correctionId: string; revision: number; createdWorkItemId: string | null }

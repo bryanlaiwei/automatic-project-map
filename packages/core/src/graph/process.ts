@@ -1,4 +1,5 @@
 import type { Pool, PoolClient } from "pg";
+import { inTransaction } from "../db.js";
 import { applyProposal, type OperationOutcome } from "./apply.js";
 import { buildContext, contextLimits, type InterpretationContext } from "./context.js";
 import { applyFactsBatch, type FactsResult } from "./facts.js";
@@ -419,19 +420,4 @@ export function retryDelayMs(attempts: number): number {
 
 function now(options: { now?: () => Date }): Date {
   return options.now?.() ?? new Date();
-}
-
-export async function inTransaction<T>(pool: Pool, work: (client: PoolClient) => Promise<T>): Promise<T> {
-  const client = await pool.connect();
-  try {
-    await client.query("begin");
-    const value = await work(client);
-    await client.query("commit");
-    return value;
-  } catch (error) {
-    await client.query("rollback");
-    throw error;
-  } finally {
-    client.release();
-  }
 }

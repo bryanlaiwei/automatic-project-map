@@ -1,7 +1,7 @@
 import { SCHEMA_VERSION, type NormalizedEvent } from "@apm/shared";
 import type { Pool } from "pg";
 import { getPool } from "../db.js";
-import { loadEnvFile } from "../env.js";
+import { loadEnvFile } from "../config.js";
 import type { InterpretationContext } from "../graph/context.js";
 import { processProject, type Interpreter } from "../graph/process.js";
 import type { Proposal, ProposalOperation } from "../graph/proposal.js";

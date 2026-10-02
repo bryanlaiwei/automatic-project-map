@@ -1,4 +1,5 @@
 import { createCipheriv, createDecipheriv, randomBytes, scryptSync } from "node:crypto";
+import { config } from "./config.js";
 
 const salt = "apm-model-credential-v1";
 let cached: { secret: string; key: Buffer } | null = null;
@@ -10,12 +11,19 @@ export class ModelSecretsError extends Error {
   }
 }
 
-export function modelSecretsConfigured(env: NodeJS.ProcessEnv = process.env): boolean {
-  return Boolean(env.APM_SECRETS_KEY?.trim());
+export function modelSecretsConfigured(env?: NodeJS.ProcessEnv): boolean {
+  return Boolean(secretsFrom(env));
 }
 
-function encryptionKey(env: NodeJS.ProcessEnv): Buffer {
-  const secret = env.APM_SECRETS_KEY?.trim();
+function secretsFrom(env?: NodeJS.ProcessEnv): string | null {
+  if (env) {
+    return env.APM_SECRETS_KEY?.trim() || null;
+  }
+  return config().secretsKey;
+}
+
+function encryptionKey(env?: NodeJS.ProcessEnv): Buffer {
+  const secret = secretsFrom(env);
   if (!secret) {
     throw new ModelSecretsError("Set APM_SECRETS_KEY before saving a model key. It encrypts keys at rest.");
   }
@@ -28,7 +36,7 @@ function encryptionKey(env: NodeJS.ProcessEnv): Buffer {
 }
 
 /** iv (12) || auth tag (16) || ciphertext. */
-export function sealModelKey(plaintext: string, env: NodeJS.ProcessEnv = process.env): Buffer {
+export function sealModelKey(plaintext: string, env?: NodeJS.ProcessEnv): Buffer {
   const iv = randomBytes(12);
   const cipher = createCipheriv("aes-256-gcm", encryptionKey(env), iv);
   const ciphertext = Buffer.concat([cipher.update(plaintext, "utf8"), cipher.final()]);
@@ -36,7 +44,7 @@ export function sealModelKey(plaintext: string, env: NodeJS.ProcessEnv = process
   return Buffer.concat([iv, tag, ciphertext]);
 }
 
-export function openModelKey(payload: Buffer, env: NodeJS.ProcessEnv = process.env): string {
+export function openModelKey(payload: Buffer, env?: NodeJS.ProcessEnv): string {
   if (payload.length < 12 + 16 + 1) {
     throw new ModelSecretsError("The saved model key is unreadable.");
   }

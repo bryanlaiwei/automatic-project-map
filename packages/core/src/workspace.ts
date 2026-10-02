@@ -1,43 +1,17 @@
 import type { Pool } from "pg";
-import type { AuthUser } from "./auth.js";
-import { inTransaction } from "./graph/process.js";
+import { projectSettingsSchema, type NodePosition, type PendingInvitation, type ProjectSettings, type Role } from "@apm/shared";
+import type { AuthUser } from "./auth-user.js";
+import { config } from "./config.js";
+import { inTransaction } from "./db.js";
 import { ownerModelSource } from "./model-credentials.js";
-import type { ModelProviderId } from "./model-providers.js";
 
-export type Role = "owner" | "member";
+export type { NodePosition, PendingInvitation, ProjectSettings, Role };
 
 export type Person = {
   userId: string;
   githubLogin: string | null;
   name: string | null;
   avatarUrl: string | null;
-};
-
-export type PendingInvitation = {
-  id: string;
-  project: { id: string; owner: string; name: string };
-  invitedBy: string | null;
-  createdAt: string;
-};
-
-export type ProjectSettings = {
-  project: { id: string; owner: string; name: string; repoId: number; trackingStartedAt: string };
-  role: Role;
-  members: Array<Person & { role: Role; joinedAt: string; you: boolean }>;
-  invitations: Array<{ id: string; githubLogin: string; invitedBy: string | null; createdAt: string }>;
-  devices: Array<{ id: string; label: string; pairedBy: string | null; createdAt: string; lastSeenAt: string | null; yours: boolean }>;
-  health: {
-    github: { lastDeliveryAt: string | null; failedDeliveries: number; waitingDeliveries: number };
-    local: { lastSessionEventAt: string | null };
-    analysis: {
-      waiting: number;
-      waitingSince: string | null;
-      gaveUp: number;
-      lastAnalyzedAt: string | null;
-      lastFailure: { at: string; error: string } | null;
-      model: { provider: ModelProviderId | null; source: "owner" | "server" | "none" };
-    };
-  };
 };
 
 export const githubLoginPattern = /^[a-z\d](?:[a-z\d]|-(?=[a-z\d])){0,38}$/i;
@@ -318,9 +292,9 @@ export async function readSettings(pool: Pool, input: { projectId: string; userI
   const githubRow = github.rows[0];
   const waitingRow = waiting.rows[0];
   const ownerProvider = await ownerModelSource(pool, row.workspace_id);
-  const serverKey = Boolean(process.env.OPENAI_API_KEY?.trim());
+  const serverKey = Boolean(config().openAiApiKey);
 
-  return {
+  return projectSettingsSchema.parse({
     project: {
       id: row.id,
       owner: row.github_owner,
@@ -374,10 +348,8 @@ export async function readSettings(pool: Pool, input: { projectId: string; userI
         },
       },
     },
-  };
+  });
 }
-
-export type NodePosition = { nodeId: string; x: number; y: number };
 
 export async function readLayout(pool: Pool, projectId: string): Promise<NodePosition[]> {
   const result = await pool.query<{ node_id: string; x: number; y: number }>(

@@ -1,7 +1,6 @@
-export const workItemStates = ["planned", "in_progress", "in_review", "merged", "closed", "unknown"] as const;
-export type WorkItemState = (typeof workItemStates)[number];
+import type { Basis, WorkItemState } from "@apm/shared";
 
-export type Basis = "observed" | "inferred" | "human";
+export { workItemStates, type Basis, type WorkItemState } from "@apm/shared";
 
 export type InferredState = "planned" | "in_progress";
 

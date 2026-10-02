@@ -11,6 +11,7 @@
     "typecheck": "tsc -b --pretty false"
   },
   "dependencies": {
+    "@apm/shared": "*",
     "@supabase/supabase-js": "^2.58.0",
     "@xyflow/react": "^12.12.0",
     "elkjs": "^0.12.0",

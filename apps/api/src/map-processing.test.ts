@@ -2,15 +2,15 @@ import type { Server } from "node:http";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { SCHEMA_VERSION, type NormalizedEvent, type SessionMessage } from "@apm/shared";
 import { createApp } from "./app.js";
-import { getPool } from "./db.js";
-import { loadEnvFile } from "./env.js";
-import { ingestEvents } from "./ingest-events.js";
-import { applyCorrection } from "./graph/corrections.js";
-import { renderContext, type InterpretationContext } from "./graph/context.js";
-import { readGraph, readWorkItem } from "./graph/graph-read.js";
-import { processProject, type Interpreter } from "./graph/process.js";
-import { proposalSchema, type Proposal, type ProposalOperation } from "./graph/proposal.js";
-import { connectRepository, insertEvents } from "./store.js";
+import { getPool } from "@apm/core/db";
+import { loadEnvFile } from "@apm/core/config";
+import { ingestEvents } from "@apm/core/ingest-events";
+import { applyCorrection } from "@apm/core/graph/corrections";
+import { renderContext, type InterpretationContext } from "@apm/core/graph/context";
+import { readGraph, readWorkItem } from "@apm/core/graph/graph-read";
+import { processProject, type Interpreter } from "@apm/core/graph/process";
+import { proposalSchema, type Proposal, type ProposalOperation } from "@apm/core/graph/proposal";
+import { connectRepository, insertEvents } from "@apm/core/store";
 
 loadEnvFile();
 

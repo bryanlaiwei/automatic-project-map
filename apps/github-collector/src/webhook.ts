@@ -23,7 +23,7 @@ export type WebhookResult =
   | { status: "events"; events: NormalizedEvent[] }
   | { status: "ignore"; note: string };
 
-export function readWebhookSecret(env: NodeJS.ProcessEnv = process.env): string {
+export function readWebhookSecret(env: NodeJS.ProcessEnv): string {
   const secret = env.GITHUB_WEBHOOK_SECRET;
   if (typeof secret !== "string" || secret.trim() === "") {
     throw new Error(
