@@ -64,26 +64,27 @@ export async function commitChanges(
   const revision = Number(bumped.rows[0]?.graph_revision);
   const batchId = "batchId" in origin ? origin.batchId : null;
   const correctionId = "correctionId" in origin ? origin.correctionId : null;
-  for (const change of changes.items) {
-    await client.query(
-      `insert into graph_changes
-        (project_id, revision, entity_kind, entity_id, change, before, after, basis, evidence_ids, batch_id, correction_id)
-       values ($1, $2, $3, $4, $5, $6::jsonb, $7::jsonb, $8, $9::uuid[], $10, $11)`,
-      [
-        projectId,
-        revision,
-        change.entityKind,
-        change.entityId,
-        change.change,
-        change.before === undefined ? null : JSON.stringify(change.before),
-        change.after === undefined ? null : JSON.stringify(change.after),
-        change.basis,
-        change.evidenceIds,
-        batchId,
-        correctionId,
-      ],
-    );
-  }
+  await client.query(
+    `insert into graph_changes
+      (project_id, revision, entity_kind, entity_id, change, before, after, basis, evidence_ids, batch_id, correction_id)
+     select $1, $2, entity_kind, entity_id, change, before::jsonb, after::jsonb, basis,
+            array(select jsonb_array_elements_text(evidence_ids::jsonb)::uuid), $3, $4
+     from unnest($5::text[], $6::uuid[], $7::text[], $8::text[], $9::text[], $10::text[], $11::text[])
+       as incoming(entity_kind, entity_id, change, before, after, basis, evidence_ids)`,
+    [
+      projectId,
+      revision,
+      batchId,
+      correctionId,
+      changes.items.map((change) => change.entityKind),
+      changes.items.map((change) => change.entityId),
+      changes.items.map((change) => change.change),
+      changes.items.map((change) => (change.before === undefined ? null : JSON.stringify(change.before))),
+      changes.items.map((change) => (change.after === undefined ? null : JSON.stringify(change.after))),
+      changes.items.map((change) => change.basis),
+      changes.items.map((change) => JSON.stringify(change.evidenceIds)),
+    ],
+  );
   return revision;
 }
 
