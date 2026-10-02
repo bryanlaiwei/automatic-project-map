@@ -143,28 +143,39 @@ export async function insertEvents(pool: Pool, events: NormalizedEvent[]): Promi
 }
 
 export async function insertEventsWith(db: Queryable, events: NormalizedEvent[]): Promise<number> {
-  let stored = 0;
+  // One insert cannot accept the same event id twice, so a repeated id keeps the first row.
+  const seen = new Set<string>();
+  const incoming: NormalizedEvent[] = [];
   for (const event of events) {
     const parsed = normalizedEventSchema.parse(event);
-    const result = await db.query(
-      `insert into normalized_events
-        (event_id, source_key, project_id, source, kind, occurred_at, details, schema_version)
-       values ($1, $2, $3, $4, $5, $6, $7::jsonb, $8)
-       on conflict (event_id) do nothing`,
-      [
-        parsed.eventId,
-        parsed.sourceKey,
-        parsed.projectId,
-        parsed.source,
-        parsed.details.kind,
-        parsed.occurredAt,
-        JSON.stringify(parsed.details),
-        parsed.schemaVersion,
-      ],
-    );
-    stored += result.rowCount ?? 0;
+    if (seen.has(parsed.eventId)) {
+      continue;
+    }
+    seen.add(parsed.eventId);
+    incoming.push(parsed);
   }
-  return stored;
+  if (incoming.length === 0) {
+    return 0;
+  }
+  const result = await db.query(
+    `insert into normalized_events
+      (event_id, source_key, project_id, source, kind, occurred_at, details, schema_version)
+     select event_id, source_key, project_id, source, kind, occurred_at, details::jsonb, schema_version
+     from unnest($1::text[], $2::text[], $3::uuid[], $4::text[], $5::text[], $6::timestamptz[], $7::text[], $8::int[])
+       as incoming(event_id, source_key, project_id, source, kind, occurred_at, details, schema_version)
+     on conflict (event_id) do nothing`,
+    [
+      incoming.map((event) => event.eventId),
+      incoming.map((event) => event.sourceKey),
+      incoming.map((event) => event.projectId),
+      incoming.map((event) => event.source),
+      incoming.map((event) => event.details.kind),
+      incoming.map((event) => event.occurredAt),
+      incoming.map((event) => JSON.stringify(event.details)),
+      incoming.map((event) => event.schemaVersion),
+    ],
+  );
+  return result.rowCount ?? 0;
 }
 
 export async function listEvents(pool: Pool, projectId: string): Promise<NormalizedEvent[]> {
