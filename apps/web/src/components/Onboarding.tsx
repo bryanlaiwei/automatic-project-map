@@ -1,9 +1,10 @@
-import { ArrowLeft, ArrowRight, LogOut, Mail } from "lucide-react";
+import { ArrowLeft, ArrowRight, ExternalLink, LogOut, Mail } from "lucide-react";
 import { useState, type FormEvent } from "react";
-import { api, errorMessage, type Me } from "../api";
+import { api, errorMessage, type Me, type Project } from "../api";
 import { parseRepository } from "../format";
 import { GithubMark, LogoMark } from "./GithubMark";
 import { cx } from "./helpers";
+import { useToast } from "./toast-context";
 import { Avatar, Button, ErrorNote, IconButton, inputClass } from "./ui";
 
 const installUrl = import.meta.env.VITE_GITHUB_APP_INSTALL_URL;
@@ -11,6 +12,7 @@ const installUrl = import.meta.env.VITE_GITHUB_APP_INSTALL_URL;
 export function Onboarding({
   token,
   me,
+  projects,
   onConnected,
   onJoined,
   onSignOut,
@@ -18,18 +20,23 @@ export function Onboarding({
 }: {
   token: string;
   me: Me;
-  onConnected: (projectId: string) => void;
-  onJoined: (projectId: string) => void;
+  projects: Project[];
+  onConnected: (projectId: string) => Promise<void>;
+  onJoined: (projectId: string) => Promise<void>;
   onSignOut: () => void;
   /** Set when the person already has a map to go back to. */
   onCancel?: (() => void) | undefined;
 }) {
+  const toast = useToast();
   const [repository, setRepository] = useState("");
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [joining, setJoining] = useState<string | null>(null);
   const [joinError, setJoinError] = useState<string | null>(null);
   const parsed = parseRepository(repository);
+  const existing = parsed
+    ? projects.find((entry) => entry.owner.toLowerCase() === parsed.owner.toLowerCase() && entry.name.toLowerCase() === parsed.name.toLowerCase())
+    : undefined;
 
   async function connect(event: FormEvent) {
     event.preventDefault();
@@ -40,8 +47,13 @@ export function Onboarding({
     setBusy(true);
     setError(null);
     try {
+      if (existing) {
+        await onConnected(existing.id);
+        return;
+      }
       const body = await api.connectProject(token, parsed);
-      onConnected(body.project.id);
+      await onConnected(body.project.id);
+      toast(`Connected ${body.project.owner}/${body.project.name}. Its map fills in as new work arrives.`, "success");
     } catch (reason) {
       setError(errorMessage(reason, "Could not connect the repository."));
     } finally {
@@ -54,7 +66,7 @@ export function Onboarding({
     setJoinError(null);
     try {
       const body = await api.acceptInvitation(token, invitationId);
-      onJoined(body.projectId);
+      await onJoined(body.projectId);
     } catch (reason) {
       setJoinError(errorMessage(reason, "Could not join the project."));
     } finally {
@@ -83,11 +95,11 @@ export function Onboarding({
             Back to the map
           </button>
         ) : null}
-        <h1 className="text-2xl font-semibold tracking-tight text-zinc-900">{onCancel ? "Connect your own repository" : "Set up your project map"}</h1>
+        <h1 className="text-2xl font-semibold tracking-tight text-zinc-900">{onCancel ? "New project" : "Set up your project map"}</h1>
         <p className="mt-2 text-[15px] text-zinc-600">
           {onCancel
-            ? "It gets its own map. The projects you were invited to stay as they are."
-            : "Connect one GitHub repository, or join a teammate’s project."}
+            ? "Each project follows one GitHub repository and gets its own map. Your other projects stay as they are."
+            : "Connect a GitHub repository, or join a teammate’s project."}
         </p>
 
         {me.invitations.length > 0 ? (
@@ -121,18 +133,18 @@ export function Onboarding({
             <li className="flex gap-3">
               <span className="flex size-5 shrink-0 items-center justify-center rounded-full bg-zinc-100 text-xs font-semibold text-zinc-600">1</span>
               <span>
-                Install the project’s GitHub App on the repository
+                Install the GitHub App on the repository. It only reads pull requests and Actions runs.
                 {installUrl ? (
-                  <>
-                    {" "}
-                    (
-                    <a href={installUrl} target="_blank" rel="noreferrer" className="font-medium text-indigo-600 hover:text-indigo-500">
-                      install
-                    </a>
-                    )
-                  </>
+                  <a
+                    href={installUrl}
+                    target="_blank"
+                    rel="noreferrer"
+                    className="mt-1 flex w-fit items-center gap-1 font-medium text-indigo-600 hover:text-indigo-500"
+                  >
+                    Install the GitHub App
+                    <ExternalLink className="size-3.5" />
+                  </a>
                 ) : null}
-                . It only reads pull requests and Actions runs.
               </span>
             </li>
             <li className="flex gap-3">
@@ -153,9 +165,14 @@ export function Onboarding({
               className={cx(inputClass, "h-10")}
             />
             <Button type="submit" variant="primary" className="h-10 shrink-0" loading={busy} disabled={!parsed} icon={<ArrowRight className="size-4" />}>
-              Connect
+              {existing ? "Open" : "Connect"}
             </Button>
           </div>
+          {existing ? (
+            <p className="mt-3 text-sm text-zinc-600">
+              You already have {existing.owner}/{existing.name}. Opening it takes you to its map.
+            </p>
+          ) : null}
           {error ? (
             <div className="mt-3">
               <ErrorNote>{error}</ErrorNote>
