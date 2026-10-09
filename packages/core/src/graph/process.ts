@@ -88,6 +88,9 @@ export async function processProject(pool: Pool, projectId: string, options: Pro
 
 type InterpretationLease = { untilMs: string };
 
+/** Leases this process currently holds, so a shutdown can clear them instead of waiting out the 8 minutes. */
+const heldInterpretationLocks = new Map<string, InterpretationLease>();
+
 const interpretationLeaseSeconds = processingDefaults.interpretationLeaseMs / 1000;
 
 /** Claims the project until the lease expires. Returns null when another run already holds it. */
@@ -101,7 +104,12 @@ async function acquireInterpretationLock(pool: Pool, projectId: string): Promise
     [projectId, interpretationLeaseSeconds],
   );
   const untilMs = result.rows[0]?.until_ms;
-  return untilMs ? { untilMs } : null;
+  if (!untilMs) {
+    return null;
+  }
+  const lease = { untilMs };
+  heldInterpretationLocks.set(projectId, lease);
+  return lease;
 }
 
 /** Pushes the same run's lease forward. False when it expired and another run took the project. */
@@ -122,10 +130,21 @@ async function renewInterpretationLock(pool: Pool, projectId: string, lease: Int
 }
 
 async function releaseInterpretationLock(pool: Pool, projectId: string, lease: InterpretationLease): Promise<void> {
+  if (heldInterpretationLocks.get(projectId) === lease) {
+    heldInterpretationLocks.delete(projectId);
+  }
   await pool.query(`update projects set locked_until = null where id = $1 and locked_until = to_timestamp($2::numeric / 1000)`, [
     projectId,
     lease.untilMs,
   ]);
+}
+
+/** Clears interpretation leases this process still holds. Safe to call more than once. */
+export async function releaseHeldInterpretationLocks(pool: Pool): Promise<void> {
+  const held = [...heldInterpretationLocks.entries()];
+  for (const [projectId, lease] of held) {
+    await releaseInterpretationLock(pool, projectId, lease);
+  }
 }
 
 async function applyPendingFacts(pool: Pool, projectId: string): Promise<FactsResult[]> {

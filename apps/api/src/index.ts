@@ -1,5 +1,5 @@
 import { assertConfig } from "@apm/core/config";
-import { startDeliveryPublisher } from "@apm/core/delivery-jobs";
+import { startDeliveryPublisher, type DeliveryPublisher } from "@apm/core/delivery-jobs";
 
 let settings: ReturnType<typeof assertConfig>;
 try {
@@ -19,10 +19,9 @@ const githubApp = {
   privateKey: settings.githubAppPrivateKey,
 };
 
-let enqueueDeliveryProcessing: (deliveryId: string) => Promise<void>;
+let deliveries: DeliveryPublisher;
 try {
-  const deliveries = await startDeliveryPublisher(settings.databaseUrl);
-  enqueueDeliveryProcessing = (deliveryId) => deliveries.enqueue(deliveryId);
+  deliveries = await startDeliveryPublisher(settings.databaseUrl);
 } catch (error) {
   console.error(error instanceof Error ? error.message : "Could not start the webhook job queue.");
   process.exit(1);
@@ -35,9 +34,35 @@ const app = createApp({
   verifyUser: (token) => verifySupabaseUser(token, pool),
   verifyRepositoryAccess: createGithubRepositoryAccessCheck(githubApp),
   lookupGithubAccount: createGithubAccountLookup(githubApp),
-  enqueueDeliveryProcessing,
+  enqueueDeliveryProcessing: (deliveryId) => deliveries.enqueue(deliveryId),
 });
 
-app.listen(settings.apiPort, "127.0.0.1", () => {
-  console.log(`api listening on http://127.0.0.1:${settings.apiPort}`);
+const server = app.listen(settings.apiPort, settings.apiHost, () => {
+  console.log(`api listening on http://${settings.apiHost}:${settings.apiPort}`);
 });
+server.on("error", (error) => {
+  console.error(error.message);
+  process.exit(1);
+});
+
+let stopping = false;
+async function shutdown(): Promise<void> {
+  if (stopping) {
+    return;
+  }
+  stopping = true;
+  try {
+    await new Promise<void>((resolve, reject) => {
+      server.close((error) => (error ? reject(error) : resolve()));
+    });
+    await deliveries.stop();
+    await pool.end();
+  } catch (error) {
+    console.error(error instanceof Error ? error.message : "API shutdown failed.");
+    process.exit(1);
+  }
+  process.exit(0);
+}
+
+process.on("SIGINT", () => void shutdown());
+process.on("SIGTERM", () => void shutdown());

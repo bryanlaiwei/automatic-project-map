@@ -4,9 +4,14 @@
   "private": true,
   "type": "module",
   "exports": {
-    ".": "./src/index.ts"
+    ".": {
+      "node-dist": "./dist/index.js",
+      "types": "./src/index.ts",
+      "default": "./src/index.ts"
+    }
   },
   "scripts": {
+    "build": "tsc -p tsconfig.build.json",
     "typecheck": "tsc --noEmit",
     "test": "vitest run"
   },

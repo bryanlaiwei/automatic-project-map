@@ -37,4 +37,5 @@ jobs:
             psql "$DATABASE_URL" -v ON_ERROR_STOP=1 -f "$f"
           done
       - run: npm run typecheck
+      - run: npm run build:server
       - run: npm test

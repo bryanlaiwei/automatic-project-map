@@ -4,13 +4,14 @@
   "private": true,
   "type": "module",
   "exports": {
-    "./access": "./src/access.ts",
-    "./github-client": "./src/github-client.ts",
-    "./enrich": "./src/enrich.ts",
-    "./refresh": "./src/refresh.ts",
-    "./webhook": "./src/webhook.ts"
+    "./access": { "node-dist": "./dist/access.js", "types": "./src/access.ts", "default": "./src/access.ts" },
+    "./github-client": { "node-dist": "./dist/github-client.js", "types": "./src/github-client.ts", "default": "./src/github-client.ts" },
+    "./enrich": { "node-dist": "./dist/enrich.js", "types": "./src/enrich.ts", "default": "./src/enrich.ts" },
+    "./refresh": { "node-dist": "./dist/refresh.js", "types": "./src/refresh.ts", "default": "./src/refresh.ts" },
+    "./webhook": { "node-dist": "./dist/webhook.js", "types": "./src/webhook.ts", "default": "./src/webhook.ts" }
   },
   "scripts": {
+    "build": "tsc -p tsconfig.build.json",
     "typecheck": "tsc --noEmit",
     "test": "vitest run"
   },

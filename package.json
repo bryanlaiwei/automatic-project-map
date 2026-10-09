@@ -10,6 +10,7 @@
     "dev:api": "npm run dev --workspace @apm/api",
     "dev:worker": "npm run dev --workspace @apm/worker",
     "dev:helper": "npm run start --workspace @apm/local-collector -- serve",
+    "build:server": "npm run build --workspace @apm/shared && npm run build --workspace @apm/github-collector && npm run build --workspace @apm/core && npm run build --workspace @apm/api && npm run build --workspace @apm/worker",
     "typecheck": "npm run typecheck --workspaces --if-present",
     "test": "npm run test --workspaces --if-present"
   },
