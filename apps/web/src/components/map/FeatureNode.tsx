@@ -2,6 +2,7 @@ import { Handle, Position, type Node, type NodeProps } from "@xyflow/react";
 import { Ban, ChevronDown } from "lucide-react";
 import { memo, useContext } from "react";
 import type { GraphFeature } from "../../api";
+import { otherGithubLogins } from "../../attribution";
 import { describeCounts } from "../../format";
 import { cx } from "../helpers";
 import { ContributorStack, StateBar, StateDot } from "../ui";
@@ -10,6 +11,7 @@ import { cardWidth, collapsedHeight, maxRows, rowHeight } from "./layout";
 
 export type FeatureNodeData = {
   feature: GraphFeature;
+  viewerLogin: string | null;
   expanded: boolean;
   selected: boolean;
   selectedWorkItemId: string | null;
@@ -19,7 +21,8 @@ export type FeatureFlowNode = Node<FeatureNodeData, "feature">;
 
 function FeatureNodeView({ data }: NodeProps<FeatureFlowNode>) {
   const actions = useContext(MapActionsContext);
-  const { feature, expanded, selected, selectedWorkItemId } = data;
+  const { feature, viewerLogin, expanded, selected, selectedWorkItemId } = data;
+  const others = otherGithubLogins(feature.contributors.people, viewerLogin);
   const blocked = feature.workItems.filter((item) => item.blocked).length;
   const shown = feature.workItems.slice(0, maxRows);
   const hidden = feature.workItems.length - shown.length;
@@ -67,6 +70,12 @@ function FeatureNodeView({ data }: NodeProps<FeatureFlowNode>) {
                 <Ban className="size-3" aria-hidden />
                 {blocked} blocked
                 <span className="text-zinc-300">·</span>
+              </span>
+            ) : null}
+            {others.length > 0 ? (
+              <span className="shrink-0 font-medium text-amber-700" title={`Pull requests by ${others.map((login) => `@${login}`).join(", ")}`}>
+                Someone else
+                <span className="font-normal text-zinc-300"> · </span>
               </span>
             ) : null}
             <span className="truncate">{describeCounts(feature.counts)}</span>

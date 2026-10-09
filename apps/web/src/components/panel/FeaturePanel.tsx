@@ -18,6 +18,7 @@ export function FeaturePanel({
   onSelectFeature,
   onChanged,
   onGone,
+  viewerLogin,
 }: {
   token: string;
   projectId: string;
@@ -27,6 +28,7 @@ export function FeaturePanel({
   onSelectFeature: (id: string) => void;
   onChanged: () => Promise<void>;
   onGone: () => void;
+  viewerLogin: string | null;
 }) {
   const toast = useToast();
   const [merging, setMerging] = useState(false);
@@ -133,7 +135,7 @@ export function FeaturePanel({
 
       <section>
         <SectionTitle>Contributors</SectionTitle>
-        <ContributorList contributors={feature.contributors} />
+        <ContributorList contributors={feature.contributors} viewerLogin={viewerLogin} />
       </section>
 
       <section>

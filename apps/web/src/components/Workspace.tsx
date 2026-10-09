@@ -1,6 +1,7 @@
 import { Check, ChevronDown, CircleAlert, ExternalLink, LoaderCircle, LogOut, Mail, Plus, Settings, WifiOff } from "lucide-react";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { ApiError, api, errorMessage, type Graph, type Me, type Project } from "../api";
+import { releaseSharesProjects } from "../release";
 import { timeAgo } from "../format";
 import { EmptyMap } from "./EmptyMap";
 import { GithubMark, LogoMark } from "./GithubMark";
@@ -352,7 +353,7 @@ export function Workspace({
                 : `Analyzing ${graph.pendingAnalysis} update${graph.pendingAnalysis === 1 ? "" : "s"}`}
             </button>
           ) : null}
-          {invitations.length > 0 ? (
+          {releaseSharesProjects && invitations.length > 0 ? (
             <Menu
               trigger={(toggle) => (
                 <button
@@ -401,6 +402,7 @@ export function Workspace({
         {graph && saved ? (
           <MapCanvas
             projectId={project.id}
+            viewerLogin={me.githubLogin}
             graph={graph}
             positions={saved}
             expanded={expanded}
@@ -417,7 +419,7 @@ export function Workspace({
                 helperConnected={helperConnected}
                 onConnectHelper={() => setSettingsTab("helper")}
                 onInvite={() => setSettingsTab("members")}
-                canInvite={project.role === "owner"}
+                canInvite={releaseSharesProjects && project.role === "owner"}
               />
             }
           />
@@ -453,6 +455,7 @@ export function Workspace({
                 onSelectFeature={selectFeature}
                 onChanged={load}
                 onGone={panelGone}
+                viewerLogin={me.githubLogin}
               />
             ) : (
               <WorkItemPanel
@@ -465,6 +468,7 @@ export function Workspace({
                 onSelectFeature={selectFeature}
                 onChanged={load}
                 onGone={panelGone}
+                viewerLogin={me.githubLogin}
               />
             )}
           </PanelShell>

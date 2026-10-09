@@ -4,7 +4,7 @@ import { createApp } from "./app.js";
 import type { AuthUser } from "./auth.js";
 import { getPool } from "@apm/core/db";
 import { loadEnvFile } from "@apm/core/config";
-import { resolveProjectInterpreter } from "@apm/core/model-credentials";
+import { deleteModelCredential, resolveProjectInterpreter, saveModelCredential } from "@apm/core/model-credentials";
 import { openAiInterpreterFromEnv } from "@apm/core/graph/openai-interpreter";
 import { ciphertextBuffer, openModelKey } from "@apm/core/secret-box";
 
@@ -20,7 +20,6 @@ const people: Record<string, AuthUser> = {
 };
 const workspace = "modelkey/app";
 const apiKey = "sk-openai-test-key-0001";
-const listedKeys: string[] = [];
 
 describe("saved model keys", () => {
   let server: Server;
@@ -40,7 +39,6 @@ describe("saved model keys", () => {
         input.owner === "modelkey" && input.name === "app" ? { status: "accessible", repoId: 88_006_001 } : { status: "denied" },
       modelKeyCheck: async (input) => (input.apiKey.endsWith("reject") ? { ok: false, error: "That key was rejected." } : { ok: true }),
       listSupplierModels: async (input) => {
-        listedKeys.push(input.apiKey);
         return {
           ok: true,
           models: [{ id: input.provider === "anthropic" ? "claude-haiku-4-5" : "gpt-5-nano", label: "listed" }],
@@ -75,33 +73,22 @@ describe("saved model keys", () => {
     });
   }
 
-  it("saves an owner's key encrypted, and uses the owner key saved most recently", async () => {
+  it("does not accept a personal model key in this release", async () => {
     expect((await call("", "/me/model")).status).toBe(401);
-    expect((await call("owner", "/me/model", { method: "PUT", body: JSON.stringify({ provider: "other", apiKey, model: "" }) })).status).toBe(400);
+    expect((await call("owner", "/me/model", { method: "PUT", body: JSON.stringify({ provider: "openai", apiKey, model: "" }) })).status).toBe(404);
+    expect((await call("owner", "/me/model/models", { method: "POST", body: JSON.stringify({ provider: "openai", apiKey }) })).status).toBe(404);
+    expect((await call("owner", "/me/model", { method: "DELETE" })).status).toBe(404);
+  });
 
-    const rejected = await call("owner", "/me/model", {
-      method: "PUT",
-      body: JSON.stringify({ provider: "openai", apiKey: "sk-test-key-reject", model: "" }),
-    });
-    expect(rejected.status).toBe(400);
-    expect(await readHint("owner")).toBeNull();
-
-    const saved = await call("owner", "/me/model", { method: "PUT", body: JSON.stringify({ provider: "openai", apiKey, model: "" }) });
-    expect(saved.status).toBe(200);
-    const credential = (await saved.json()) as { provider: string; model: string; hint: string };
-    expect(credential).toMatchObject({ provider: "openai", model: "gpt-5-nano", hint: "0001" });
-    expect(JSON.stringify(credential)).not.toContain(apiKey);
+  it("saves an owner's key encrypted, and uses the owner key saved most recently", async () => {
+    const saved = await saveModelCredential(pool, people.owner?.id ?? "", { provider: "openai", apiKey, model: "gpt-5-nano" });
+    expect(saved).toMatchObject({ provider: "openai", model: "gpt-5-nano", hint: "0001" });
+    expect(JSON.stringify(saved)).not.toContain(apiKey);
 
     const stored = await pool.query<{ key_ciphertext: unknown }>(`select key_ciphertext from user_model_credentials where user_id = $1`, [people.owner?.id]);
     const sealed = ciphertextBuffer(stored.rows[0]?.key_ciphertext);
     expect(sealed.toString("utf8")).not.toContain(apiKey);
     expect(openModelKey(sealed)).toBe(apiKey);
-
-    const listed = await call("owner", "/me/model/models", { method: "POST", body: JSON.stringify({ provider: "openai", apiKey: "" }) });
-    expect(listed.status).toBe(200);
-    expect(await listed.json()).toEqual({ models: [{ id: "gpt-5-nano", label: "listed" }] });
-    expect(listedKeys.at(-1)).toBe(apiKey);
-    expect((await call("owner", "/me/model/models", { method: "POST", body: JSON.stringify({ provider: "gemini", apiKey: "" }) })).status).toBe(400);
 
     const connected = await call("owner", "/projects", { method: "POST", body: JSON.stringify({ owner: "modelkey", name: "app" }) });
     expect(connected.status).toBe(201);
@@ -110,14 +97,17 @@ describe("saved model keys", () => {
     const settings = (await (await call("owner", `/projects/${projectId}/settings`)).json()) as {
       health: { analysis: { model: { provider: string; source: string } } };
     };
-    expect(settings.health.analysis.model).toEqual({ provider: "openai", source: "owner" });
+    const fallbackBeforeDelete = openAiInterpreterFromEnv();
+    expect(settings.health.analysis.model).toEqual(
+      fallbackBeforeDelete ? { provider: "openai", source: "server" } : { provider: null, source: "none" },
+    );
     expect((await resolveProjectInterpreter(pool, projectId))?.model).toBe("gpt-5-nano");
 
-    const mateSaved = await call("mate", "/me/model", {
-      method: "PUT",
-      body: JSON.stringify({ provider: "anthropic", apiKey: "sk-ant-test-key-0002", model: "claude-haiku-4-5" }),
+    await saveModelCredential(pool, people.mate?.id ?? "", {
+      provider: "anthropic",
+      apiKey: "sk-ant-test-key-0002",
+      model: "claude-haiku-4-5",
     });
-    expect(mateSaved.status).toBe(200);
     expect((await resolveProjectInterpreter(pool, projectId))?.model).toBe("gpt-5-nano");
 
     await pool.query(
@@ -128,8 +118,8 @@ describe("saved model keys", () => {
     );
     expect((await resolveProjectInterpreter(pool, projectId))?.model).toBe("claude-haiku-4-5");
 
-    expect((await call("owner", "/me/model", { method: "DELETE" })).status).toBe(204);
-    expect((await call("mate", "/me/model", { method: "DELETE" })).status).toBe(204);
+    await deleteModelCredential(pool, people.owner?.id ?? "");
+    await deleteModelCredential(pool, people.mate?.id ?? "");
     const cleared = (await (await call("owner", "/me/model")).json()) as { credential: unknown };
     expect(cleared.credential).toBeNull();
     const fallback = openAiInterpreterFromEnv();
@@ -139,15 +129,11 @@ describe("saved model keys", () => {
   it("refuses to save a key when the encryption secret is missing", async () => {
     delete process.env.APM_SECRETS_KEY;
     try {
-      const response = await call("owner", "/me/model", { method: "PUT", body: JSON.stringify({ provider: "gemini", apiKey, model: "" }) });
-      expect(response.status).toBe(503);
+      await expect(
+        saveModelCredential(pool, people.owner?.id ?? "", { provider: "gemini", apiKey, model: "" }),
+      ).rejects.toThrow(/APM_SECRETS_KEY/);
     } finally {
       process.env.APM_SECRETS_KEY = secretsKey;
     }
   });
 });
-
-async function readHint(who: keyof typeof people): Promise<string | null> {
-  const result = await pool.query<{ key_hint: string }>(`select key_hint from user_model_credentials where user_id = $1`, [people[who]?.id]);
-  return result.rows[0]?.key_hint ?? null;
-}

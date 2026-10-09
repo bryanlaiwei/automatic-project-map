@@ -52,6 +52,7 @@ export function WorkItemPanel({
   onSelectFeature,
   onChanged,
   onGone,
+  viewerLogin,
 }: {
   token: string;
   projectId: string;
@@ -61,6 +62,7 @@ export function WorkItemPanel({
   onSelectFeature: (id: string) => void;
   onChanged: () => Promise<void>;
   onGone: () => void;
+  viewerLogin: string | null;
 }) {
   const toast = useToast();
   const [dialog, setDialog] = useState<DialogKind>(null);
@@ -154,7 +156,7 @@ export function WorkItemPanel({
         ) : (
           <div className="space-y-2.5">
             {item.pullRequests.map((pull) => (
-              <PullRequestCard key={pull.artifactId} pull={pull} />
+              <PullRequestCard key={pull.artifactId} pull={pull} viewerLogin={viewerLogin} />
             ))}
           </div>
         )}
@@ -199,7 +201,7 @@ export function WorkItemPanel({
 
       <section>
         <SectionTitle>Contributors</SectionTitle>
-        <ContributorList contributors={item.contributors} />
+        <ContributorList contributors={item.contributors} viewerLogin={viewerLogin} />
       </section>
 
       <section>

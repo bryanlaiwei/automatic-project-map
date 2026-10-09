@@ -59,6 +59,17 @@ const listModelsBody = z.object({
   apiKey: z.string(),
 });
 
+/** This release groups every project with the server OpenAI key. The handlers below stay for a later release. */
+const releaseChoosesModelKey = false;
+
+function modelKeyClosed(res: Response): boolean {
+  if (releaseChoosesModelKey) {
+    return false;
+  }
+  res.status(404).json({ error: "This release uses the server OpenAI key." });
+  return true;
+}
+
 export function workspaceRouter(input: {
   pool: Pool;
   authenticate: (req: Request, res: Response) => Promise<AuthUser | null>;
@@ -108,6 +119,9 @@ export function workspaceRouter(input: {
   });
 
   router.put("/me/model", async (req, res) => {
+    if (modelKeyClosed(res)) {
+      return;
+    }
     const user = await authenticate(req, res);
     if (!user) {
       return;
@@ -156,6 +170,9 @@ export function workspaceRouter(input: {
   });
 
   router.post("/me/model/models", async (req, res) => {
+    if (modelKeyClosed(res)) {
+      return;
+    }
     const user = await authenticate(req, res);
     if (!user) {
       return;
@@ -195,6 +212,9 @@ export function workspaceRouter(input: {
   });
 
   router.delete("/me/model", async (req, res) => {
+    if (modelKeyClosed(res)) {
+      return;
+    }
     const user = await authenticate(req, res);
     if (!user) {
       return;

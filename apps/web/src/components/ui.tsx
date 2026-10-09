@@ -8,6 +8,7 @@ import {
   type ReactNode,
 } from "react";
 import type { Basis, Contributors, WorkItemState } from "../api";
+import { sameGithubLogin } from "../attribution";
 import { agentMeta, basisLabel, stateMeta, timeAgo } from "../format";
 import { cx, useNow } from "./helpers";
 
@@ -153,7 +154,7 @@ export function ContributorStack({ contributors, max = 4, size = 20 }: { contrib
   );
 }
 
-export function ContributorList({ contributors }: { contributors: Contributors }) {
+export function ContributorList({ contributors, viewerLogin }: { contributors: Contributors; viewerLogin: string | null }) {
   if (contributors.agents.length + contributors.people.length === 0) {
     return <p className="text-sm text-zinc-500">No contributors recorded yet.</p>;
   }
@@ -165,17 +166,22 @@ export function ContributorList({ contributors }: { contributors: Contributors }
           {agentMeta[agent]?.label ?? agent}
         </span>
       ))}
-      {contributors.people.map((login) => (
-        <a
-          key={login}
-          href={`https://github.com/${login}`}
-          target="_blank"
-          rel="noreferrer"
-          className="inline-flex items-center gap-1.5 rounded-full bg-zinc-100 py-0.5 pr-2.5 pl-0.5 text-xs font-medium text-zinc-700 hover:bg-zinc-200"
-        >
-          <Avatar login={login} size={18} />@{login}
-        </a>
-      ))}
+      {contributors.people.map((login) => {
+        const someoneElse = !sameGithubLogin(login, viewerLogin);
+        return (
+          <a
+            key={login}
+            href={`https://github.com/${login}`}
+            target="_blank"
+            rel="noreferrer"
+            title={someoneElse ? "Someone else created this" : "You"}
+            className="inline-flex items-center gap-1.5 rounded-full bg-zinc-100 py-0.5 pr-2.5 pl-0.5 text-xs font-medium text-zinc-700 hover:bg-zinc-200"
+          >
+            <Avatar login={login} size={18} />@{login}
+            {someoneElse ? <span className="font-medium text-amber-800">· someone else</span> : null}
+          </a>
+        );
+      })}
     </div>
   );
 }

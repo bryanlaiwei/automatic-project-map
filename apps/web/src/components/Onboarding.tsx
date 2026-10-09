@@ -1,6 +1,7 @@
 import { ArrowLeft, ArrowRight, ExternalLink, LogOut, Mail } from "lucide-react";
 import { useState, type FormEvent } from "react";
 import { api, errorMessage, type Me, type Project } from "../api";
+import { releaseSharesProjects } from "../release";
 import { parseRepository } from "../format";
 import { GithubMark, LogoMark } from "./GithubMark";
 import { cx } from "./helpers";
@@ -99,10 +100,10 @@ export function Onboarding({
         <p className="mt-2 text-[15px] text-zinc-600">
           {onCancel
             ? "Each project follows one GitHub repository and gets its own map. Your other projects stay as they are."
-            : "Connect a GitHub repository, or join a teammate’s project."}
+            : "Connect a GitHub repository. The map is built from your agent sessions and that repository."}
         </p>
 
-        {me.invitations.length > 0 ? (
+        {releaseSharesProjects && me.invitations.length > 0 ? (
           <section className="mt-8 space-y-2">
             {me.invitations.map((invitation) => (
               <div key={invitation.id} className="animate-in flex items-center gap-3 rounded-2xl bg-white p-4 shadow-sm ring-1 ring-indigo-200">
