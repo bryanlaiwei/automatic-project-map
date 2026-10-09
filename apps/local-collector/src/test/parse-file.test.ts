@@ -1,11 +1,11 @@
 import { describe, expect, it } from "vitest";
-import { mkdtempSync, realpathSync, symlinkSync, writeFileSync } from "node:fs";
+import { mkdirSync, mkdtempSync, readFileSync, realpathSync, symlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { parseClaudeCodeSession } from "../adapters/claude-code.js";
 import { parseCodexSession, parseJsonLines } from "../adapters/codex.js";
-import { parseCursorSession } from "../adapters/cursor.js";
+import { cursorAdapter, parseCursorSession } from "../adapters/cursor.js";
 import { collectSession, eventsFromParsedSession } from "../parse-file.js";
 
 const fixtures = join(dirname(fileURLToPath(import.meta.url)), "../../fixtures");
@@ -77,6 +77,35 @@ describe("session samples", () => {
     const result = collect("cursor", parsed, ["/Projects/my-app"]);
     expect(result.eligible).toBe(true);
     expect(result.events[0]?.source).toBe("cursor");
+  });
+
+  it("reads a Cursor agent transcript and keeps the same event shape", () => {
+    const work = realpathSync(mkdtempSync(join(tmpdir(), "apm-cursor-work-")));
+    const root = realpathSync(mkdtempSync(join(tmpdir(), "apm-cursor-logs-")));
+    const sessionId = "cursor-native-1";
+    const filePath = join(root, "projects", work.slice(1).replaceAll("/", "-"), "agent-transcripts", sessionId, `${sessionId}.jsonl`);
+    mkdirSync(dirname(filePath), { recursive: true });
+    writeFileSync(
+      filePath,
+      `${JSON.stringify({ role: "user", message: { content: [{ type: "text", text: "Add the note." }] } })}\n${JSON.stringify({
+        role: "assistant",
+        message: { content: [{ type: "text", text: "Added the note." }, { type: "tool_use", name: "Write", input: {} }] },
+      })}\n`,
+    );
+
+    const locator = cursorAdapter.discover(root).find((item) => item.logFile === filePath);
+    expect(locator).toBeDefined();
+    if (!locator) {
+      return;
+    }
+    const parsed = cursorAdapter.read(locator, readFileSync(filePath));
+    expect(parsed.sessionId).toBe(sessionId);
+    expect(parsed.workingFolder).toBe(work);
+    expect(parsed.createdAt).not.toBeNull();
+    expect(parsed.records.map((record) => record.text).join("\n")).toContain("Add the note.");
+    expect(parsed.records.map((record) => record.text).join("\n")).toContain("[tool output omitted]");
+    expect(collect("cursor", parsed, [work]).eligible).toBe(true);
+    expect(collect("cursor", parsed, [work]).events[0]?.source).toBe("cursor");
   });
 
   it("matches a selected root when the session folder is reached through a symlink", () => {

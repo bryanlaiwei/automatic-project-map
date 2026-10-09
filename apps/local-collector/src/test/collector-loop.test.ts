@@ -54,10 +54,11 @@ function acceptingTransport(requests: NormalizedEvent[][]): EventUploadTransport
 }
 
 describe("collector loop", () => {
-  it("defaults to the Codex and Claude Code log folders and reads Cursor only when configured", () => {
+  it("defaults to the Codex, Claude Code, and Cursor log folders", () => {
     expect(defaultLogRoots({}, "/home/me")).toEqual({
       codex: "/home/me/.codex/sessions",
       claude_code: "/home/me/.claude/projects",
+      cursor: "/home/me/.cursor",
     });
     expect(defaultLogRoots({ APM_CURSOR_SESSIONS: "/tmp/cursor" }, "/home/me").cursor).toBe("/tmp/cursor");
   });
