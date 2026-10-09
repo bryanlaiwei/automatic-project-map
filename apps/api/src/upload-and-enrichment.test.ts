@@ -337,7 +337,9 @@ describe("session upload and GitHub enrichment", () => {
   }
 });
 
-describe("dummy repository enrichment", () => {
+// This calls `gh` as whoever is signed in on the machine. GitHub Actions sets CI, and its token
+// cannot stand in for that login, so the live read stays on a laptop and off in CI.
+describe.skipIf(process.env.CI === "true")("dummy repository enrichment", () => {
   it("reads the current pull request and workflow run from the test repository", () => {
     const repo = "bryanlaiwei/automatic-project-map-test";
     const pulls = githubJson(`/repos/${repo}/pulls?state=all&per_page=5`);
