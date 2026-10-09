@@ -81,7 +81,7 @@ describe("saved model keys", () => {
   });
 
   it("saves an owner's key encrypted, and uses the owner key saved most recently", async () => {
-    const saved = await saveModelCredential(pool, people.owner?.id ?? "", { provider: "openai", apiKey, model: "" });
+    const saved = await saveModelCredential(pool, people.owner?.id ?? "", { provider: "openai", apiKey, model: "gpt-5-nano" });
     expect(saved).toMatchObject({ provider: "openai", model: "gpt-5-nano", hint: "0001" });
     expect(JSON.stringify(saved)).not.toContain(apiKey);
 
