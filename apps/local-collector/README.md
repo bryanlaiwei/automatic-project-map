@@ -46,7 +46,7 @@ flowchart TD
 - `src/contract/session.ts` defines the parsed session and one user or assistant message.
 - `src/adapters/codex.ts` reads a Codex jsonl file and keeps user messages and assistant message text.
 - `src/adapters/claude-code.ts` reads a Claude Code jsonl file and keeps lines whose type is `user` or `assistant`.
-- `src/adapters/cursor.ts` reads a Cursor session directory and keeps transcript lines whose role is `user` or `assistant`.
+- `src/adapters/cursor.ts` reads Cursor agent transcripts and hook exports, and keeps lines whose role is `user` or `assistant`.
 - `src/message-text.ts` keeps written message text, drops hidden reasoning, and replaces tool calls with `[tool output omitted]`.
 - `src/build-events.ts` turns new messages into `session.started` and `session.content_added` events. Each event stays within 8,000 characters, 200 messages, and 256 KiB.
 - `src/upload-outbox.ts` sends queued events to the API and leaves failed uploads in the outbox for a later try.
