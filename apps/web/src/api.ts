@@ -98,7 +98,7 @@ export type HelperStatus = {
   projects: HelperProjectStatus[];
 };
 
-const apiUrl = import.meta.env.VITE_API_URL || "http://127.0.0.1:4000";
+export const apiUrl = import.meta.env.VITE_API_URL || "http://127.0.0.1:4000";
 export const helperUrl = import.meta.env.VITE_HELPER_URL || "http://127.0.0.1:47321";
 
 export class ApiError extends Error {

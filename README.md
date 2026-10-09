@@ -45,6 +45,34 @@ npm run dev:helper
 
 `npm test` needs `DATABASE_URL` and the migrations in `supabase/migrations` applied. `supabase start` does both. Tests that talk to GitHub are mocked.
 
+## Server
+
+`npm run dev:api` and `npm run dev:worker` stay on your machine and run TypeScript directly. On a server, compile first, then start the compiled programs:
+
+```bash
+npm run build:server
+npm start --workspace @apm/api
+npm start --workspace @apm/worker
+```
+
+`npm start` listens on every interface and on `PORT` (otherwise `API_PORT`, otherwise 4000). Set `HOST` to pin the address. The API and the worker both stop on `SIGTERM`: the API stops accepting requests, stops the webhook publisher, and closes the database pool. A worker stopped during a model call releases the interpretation lease it holds.
+
+The web app bakes its addresses in at build time, so set them before building:
+
+```bash
+npm run build --workspace @apm/web
+```
+
+Required environment variables: `DATABASE_URL`, `GITHUB_WEBHOOK_SECRET`, `GITHUB_APP_ID`, `GITHUB_APP_PRIVATE_KEY`, `SUPABASE_URL` (and `SUPABASE_JWT_SECRET` when tokens are still HS256), `APM_SECRETS_KEY`, and `WEB_ORIGIN`. `OPENAI_API_KEY` is only for a server-wide model key. A missing `.env` file is fine. Variables already set in the environment are left as they are.
+
+`VITE_SUPABASE_URL`, `VITE_SUPABASE_ANON_KEY`, and `VITE_API_URL` have to be set before the web build. The helper still runs on each person's computer. Set that computer's `WEB_ORIGIN` to the hosted site so the site can reach it. Pairing sends the API address from `VITE_API_URL`.
+
+Each API process opens `DATABASE_POOL_MAX` database connections (default 10) plus 2 for the webhook publisher. The worker opens `DATABASE_POOL_MAX` plus 4. Two API processes and one worker is 38 at the defaults. On Supabase, use the pooler connection string and lower `DATABASE_POOL_MAX`. Turn on database backups. Keep a copy of `APM_SECRETS_KEY` somewhere safe: saved model keys cannot be read without it.
+
+In the Supabase dashboard, add the site address to the redirect URLs. Add that same address as the GitHub OAuth callback. Point the GitHub App webhook at `https://<your-api>/github/webhook`.
+
+An index added later, once a table has real data, should use `create index concurrently` and run outside a transaction.
+
 Login, the single-repository GitHub connection, webhook reception, session samples, folder matching, and the common event contracts sit on top of this skeleton.
 
 Collection is recoverable. The helper keeps per-session checkpoints and an upload queue in SQLite. Eligible sessions are queued from the beginning of the log, including opening messages found after the helper starts. A session created before tracking stays excluded when it is resumed. Appended lines are queued once. If the upload fails, the queue is still there after a restart and the same event ids are sent again.

@@ -2,6 +2,7 @@ import { useCallback, useEffect, useState, type FormEvent } from "react";
 import {
   addHelperFolder,
   api,
+  apiUrl,
   errorMessage,
   pairLocalHelper,
   readHelperOverview,
@@ -192,7 +193,7 @@ export function HelperPage() {
                   <input name="code" required autoComplete="one-time-code" spellCheck={false} placeholder="Paste the code from the web app" className={inputClass} />
                 </Field>
                 <Field label="API URL">
-                  <input name="apiUrl" required spellCheck={false} defaultValue={pairings[0]?.apiUrl ?? "http://127.0.0.1:4000"} className={inputClass} />
+                  <input name="apiUrl" required spellCheck={false} defaultValue={pairings[0]?.apiUrl ?? apiUrl} className={inputClass} />
                 </Field>
                 <Button type="submit" variant="secondary" loading={pairing}>
                   Connect

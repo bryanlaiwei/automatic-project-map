@@ -11,6 +11,7 @@ try {
 
 const { getPool } = await import("@apm/core/db");
 const { openAiInterpreterFromEnv } = await import("@apm/core/graph/openai-interpreter");
+const { releaseHeldInterpretationLocks } = await import("@apm/core/graph/process");
 const { resolveProjectInterpreter } = await import("@apm/core/model-credentials");
 const { backgroundJobs, startWorker } = await import("./worker.js");
 
@@ -43,8 +44,14 @@ async function shutdown(): Promise<void> {
     return;
   }
   stopping = true;
-  await worker.stop();
-  await pool.end();
+  try {
+    await worker.stop();
+    await releaseHeldInterpretationLocks(pool);
+    await pool.end();
+  } catch (error) {
+    console.error(error instanceof Error ? error.message : "Worker shutdown failed.");
+    process.exit(1);
+  }
   process.exit(0);
 }
 process.on("SIGINT", () => void shutdown());
