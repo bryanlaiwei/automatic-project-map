@@ -12,6 +12,7 @@ import {
 } from "lucide-react";
 import { useState, type ReactNode } from "react";
 import type { PullRequestDetail, WorkflowRun } from "../../api";
+import { sameGithubLogin } from "../../attribution";
 import { cx } from "../helpers";
 import { Avatar } from "../ui";
 
@@ -103,7 +104,7 @@ function RunRow({ run }: { run: WorkflowRun }) {
   );
 }
 
-export function PullRequestCard({ pull }: { pull: PullRequestDetail }) {
+export function PullRequestCard({ pull, viewerLogin }: { pull: PullRequestDetail; viewerLogin: string | null }) {
   const state = pullState(pull);
   const reviews = latestReviews(pull);
   return (
@@ -119,8 +120,9 @@ export function PullRequestCard({ pull }: { pull: PullRequestDetail }) {
           <div className="mt-1 flex flex-wrap items-center gap-x-2 gap-y-1 text-xs text-zinc-500">
             <span className="font-medium">{state.label}</span>
             {pull.author ? (
-              <span className="inline-flex items-center gap-1">
+              <span className="inline-flex items-center gap-1" title={sameGithubLogin(pull.author, viewerLogin) ? "You" : "Someone else created this"}>
                 <Avatar login={pull.author} size={14} />@{pull.author}
+                {sameGithubLogin(pull.author, viewerLogin) ? null : <span className="font-medium text-amber-800">· someone else</span>}
               </span>
             ) : null}
             {reviews.map((review) => (
@@ -132,6 +134,7 @@ export function PullRequestCard({ pull }: { pull: PullRequestDetail }) {
                 )}
               >
                 {review.decision.toLowerCase() === "approved" ? "Approved" : "Changes requested"} by @{review.reviewer}
+                {sameGithubLogin(review.reviewer, viewerLogin) ? null : " · someone else"}
               </span>
             ))}
           </div>

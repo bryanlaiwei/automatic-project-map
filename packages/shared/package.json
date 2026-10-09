@@ -8,6 +8,11 @@
       "node-dist": "./dist/index.js",
       "types": "./src/index.ts",
       "default": "./src/index.ts"
+    },
+    "./session-content-id": {
+      "node-dist": "./dist/logic/session-content-id.js",
+      "types": "./src/logic/session-content-id.ts",
+      "default": "./src/logic/session-content-id.ts"
     }
   },
   "scripts": {

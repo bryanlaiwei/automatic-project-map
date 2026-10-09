@@ -3,8 +3,6 @@ import { projectSettingsSchema, type NodePosition, type PendingInvitation, type 
 import type { AuthUser } from "./auth-user.js";
 import { config } from "./config.js";
 import { inTransaction } from "./db.js";
-import { ownerModelSource } from "./model-credentials.js";
-
 export type { NodePosition, PendingInvitation, ProjectSettings, Role };
 
 export type Person = {
@@ -291,7 +289,7 @@ export async function readSettings(pool: Pool, input: { projectId: string; userI
   const latest = batches.rows[0];
   const githubRow = github.rows[0];
   const waitingRow = waiting.rows[0];
-  const ownerProvider = await ownerModelSource(pool, row.workspace_id);
+  // Saved personal keys stay in the database. This release reports the server OpenAI key, which is what analysis uses.
   const serverKey = Boolean(config().openAiApiKey);
 
   return projectSettingsSchema.parse({
@@ -343,8 +341,8 @@ export async function readSettings(pool: Pool, input: { projectId: string; userI
             ? { at: latest.completed_at.toISOString(), error: latest.error }
             : null,
         model: {
-          provider: ownerProvider ?? (serverKey ? "openai" : null),
-          source: ownerProvider ? "owner" : serverKey ? "server" : "none",
+          provider: serverKey ? "openai" : null,
+          source: serverKey ? "server" : "none",
         },
       },
     },

@@ -57,6 +57,7 @@ const edgeTypes = { dependency: DependencyEdgeView };
 
 type MapCanvasProps = {
   projectId: string;
+  viewerLogin: string | null;
   graph: Graph;
   positions: ReadonlyMap<string, XY>;
   expanded: ReadonlySet<string>;
@@ -94,6 +95,7 @@ function savedViewport(projectId: string): Viewport | null {
 
 function MapCanvasInner({
   projectId,
+  viewerLogin,
   graph,
   positions,
   expanded,
@@ -161,6 +163,7 @@ function MapCanvasInner({
         position,
         data: {
           feature,
+          viewerLogin,
           expanded: expanded.has(feature.id),
           selected: feature.id === selectedFeatureId,
           selectedWorkItemId,
@@ -169,7 +172,7 @@ function MapCanvasInner({
       };
       return [node];
     });
-  }, [graph.features, positions, expanded, selectedFeatureId, selectedWorkItemId]);
+  }, [graph.features, viewerLogin, positions, expanded, selectedFeatureId, selectedWorkItemId]);
 
   const [nodes, setNodes] = useState<FeatureFlowNode[]>(derived);
   useEffect(() => setNodes(derived), [derived]);

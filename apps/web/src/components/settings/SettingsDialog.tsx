@@ -1,6 +1,7 @@
 import { Activity, ChevronDown, Copy, KeyRound, Laptop, Settings2, Trash2, UserPlus, Users, X } from "lucide-react";
 import { useCallback, useEffect, useState, type FormEvent, type ReactNode } from "react";
 import { api, errorMessage, pairLocalHelper, readHelperStatus, type HelperStatus, type ModelProviderId, type ModelSetup, type ProjectSettings, type SupplierModel } from "../../api";
+import { releaseChoosesModelKey, releaseSharesProjects } from "../../release";
 import { formatDateTime, timeAgo } from "../../format";
 import { ConfirmDialog } from "../corrections/Dialogs";
 import { GithubMark } from "../GithubMark";
@@ -17,6 +18,16 @@ const tabs: Array<{ id: SettingsTab; label: string; icon: ReactNode }> = [
   { id: "model", label: "Model", icon: <KeyRound className="size-4" /> },
   { id: "health", label: "Health", icon: <Activity className="size-4" /> },
 ];
+
+const visibleTabs = tabs.filter((entry) => {
+  if (entry.id === "members") {
+    return releaseSharesProjects;
+  }
+  if (entry.id === "model") {
+    return releaseChoosesModelKey;
+  }
+  return true;
+});
 
 export function SettingsDialog({
   token,
@@ -73,7 +84,7 @@ export function SettingsDialog({
       >
         <nav className="flex w-48 shrink-0 flex-col gap-0.5 border-r border-zinc-100 bg-zinc-50/60 p-3">
           <p className="px-2.5 pt-1 pb-3 text-sm font-semibold text-zinc-900">Settings</p>
-          {tabs.map((entry) => (
+          {visibleTabs.map((entry) => (
             <button
               key={entry.id}
               type="button"
@@ -90,7 +101,7 @@ export function SettingsDialog({
         </nav>
         <div className="flex min-w-0 flex-1 flex-col">
           <div className="flex h-14 shrink-0 items-center justify-between border-b border-zinc-100 pr-3 pl-6">
-            <h2 className="text-base font-semibold text-zinc-900">{tabs.find((entry) => entry.id === tab)?.label}</h2>
+            <h2 className="text-base font-semibold text-zinc-900">{visibleTabs.find((entry) => entry.id === tab)?.label}</h2>
             <IconButton label="Close settings" onClick={onClose}>
               <X className="size-4" />
             </IconButton>
@@ -105,9 +116,9 @@ export function SettingsDialog({
             {settings ? (
               <>
                 {tab === "general" ? <GeneralTab token={token} settings={settings} onDeleted={onProjectDeleted} /> : null}
-                {tab === "members" ? <MembersTab token={token} settings={settings} reload={reload} onLeft={onLeft} /> : null}
+                {releaseSharesProjects && tab === "members" ? <MembersTab token={token} settings={settings} reload={reload} onLeft={onLeft} /> : null}
                 {tab === "helper" ? <HelperTab token={token} settings={settings} reload={reload} /> : null}
-                {tab === "model" ? <ModelTab token={token} reload={reload} /> : null}
+                {releaseChoosesModelKey && tab === "model" ? <ModelTab token={token} reload={reload} /> : null}
                 {tab === "health" ? <HealthTab settings={settings} /> : null}
               </>
             ) : null}
@@ -517,11 +528,10 @@ function providerLabel(provider: "openai" | "anthropic" | "gemini" | null): stri
 function modelSourceLine(model: ProjectSettings["health"]["analysis"]["model"]): string {
   switch (model.source) {
     case "owner":
-      return `Using an owner's ${providerLabel(model.provider)} key.`;
     case "server":
-      return "Using the server OpenAI key. An owner can replace it from the Model tab.";
+      return "Using the server OpenAI key.";
     case "none":
-      return "No model key yet. An owner can add one in the Model tab.";
+      return "No server OpenAI key is set, so new work is not grouped yet.";
     default: {
       const unhandled: never = model.source;
       return unhandled;
@@ -548,11 +558,7 @@ function HealthTab({ settings }: { settings: ProjectSettings }) {
         {analysis.waiting > 0 ? (
           <p>
             {analysis.waiting} update{analysis.waiting === 1 ? "" : "s"} waiting since {timeAgo(analysis.waitingSince, now)}.
-            {waitingMinutes > 5
-              ? analysis.model.source === "none"
-                ? " Add a model key in the Model tab, and make sure the worker is running."
-                : " The worker may not be running."
-              : ""}
+            {waitingMinutes > 5 ? " The worker may not be running, or OPENAI_API_KEY is not set." : ""}
           </p>
         ) : (
           <p>Nothing is waiting.</p>

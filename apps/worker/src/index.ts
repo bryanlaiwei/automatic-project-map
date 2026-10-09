@@ -12,7 +12,6 @@ try {
 const { getPool } = await import("@apm/core/db");
 const { openAiInterpreterFromEnv } = await import("@apm/core/graph/openai-interpreter");
 const { releaseHeldInterpretationLocks } = await import("@apm/core/graph/process");
-const { resolveProjectInterpreter } = await import("@apm/core/model-credentials");
 const { backgroundJobs, startWorker } = await import("./worker.js");
 
 const pool = getPool();
@@ -27,15 +26,16 @@ const worker = await startWorker({
   deliveries: { pool, github },
   processing: {
     pool,
-    resolveInterpreter: (projectId) => resolveProjectInterpreter(pool, projectId),
-    interpretation: fallback ? "all" : "owner-key",
+    // resolveProjectInterpreter prefers a saved personal key. This release always uses the server OpenAI key.
+    resolveInterpreter: async () => fallback,
+    interpretation: fallback ? "all" : "none",
   },
 });
 console.log("worker running: webhook deliveries as they arrive, stale deliveries every minute, GitHub refresh every 5 minutes, project processing every 5 seconds");
 console.log(
   fallback
-    ? `map interpretation uses each project owner's saved model key, or OpenAI model ${fallback.model} when an owner has not saved one`
-    : "no server OpenAI key: map interpretation runs for projects whose owner has saved an OpenAI, Anthropic, or Gemini key",
+    ? `map interpretation uses the server OpenAI model ${fallback.model}`
+    : "no server OpenAI key: map interpretation is off until OPENAI_API_KEY is set",
 );
 
 let stopping = false;

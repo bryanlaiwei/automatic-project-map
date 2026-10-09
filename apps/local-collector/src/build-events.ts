@@ -1,14 +1,8 @@
 // Turns new session messages into session.started and session.content_added events.
 // A long message is split across rows so each stored piece stays within evidenceRowChars.
 
-import {
-  evidenceRowChars,
-  normalizedEventSchema,
-  SCHEMA_VERSION,
-  sessionContentEventId,
-  type NormalizedEvent,
-  type SessionMessage,
-} from "@apm/shared";
+import { evidenceRowChars, normalizedEventSchema, SCHEMA_VERSION, type NormalizedEvent, type SessionMessage } from "@apm/shared";
+import { sessionContentEventId } from "@apm/shared/session-content-id";
 import type { SessionAgentId } from "./contract/adapter.js";
 
 /** Keeps every content event well under the API's per-request body limit. */
