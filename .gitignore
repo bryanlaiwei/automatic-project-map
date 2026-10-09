@@ -17,6 +17,8 @@ supabase/.branches/
 *.db-journal
 *.sqlite
 *.sqlite-journal
+*.sqlite-wal
+*.sqlite-shm
 
 .DS_Store
 .idea/

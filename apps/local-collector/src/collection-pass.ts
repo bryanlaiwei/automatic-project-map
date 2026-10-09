@@ -40,7 +40,7 @@ function collectOne(input: CollectPassInput, source: Discovered, result: Collect
     return;
   }
   const sessionId = source.parsed.sessionId;
-  if (input.db.isExcluded(source.agent, sessionId)) {
+  if (input.db.isExcluded(source.agent, sessionId, input.projectId)) {
     result.excluded.push(label);
     return;
   }
@@ -54,8 +54,8 @@ function collectOne(input: CollectPassInput, source: Discovered, result: Collect
   });
 
   if (!decision.eligible && decision.reason === "created_before_tracking") {
-    input.db.excludeSession(source.agent, sessionId, decision.reason);
-    input.db.dropQueuedSession(source.agent, sessionId);
+    input.db.excludeSession(source.agent, sessionId, input.projectId, decision.reason);
+    input.db.dropQueuedSession(source.agent, sessionId, input.projectId);
     result.excluded.push(label);
     return;
   }
@@ -66,7 +66,7 @@ function collectOne(input: CollectPassInput, source: Discovered, result: Collect
   if (!decision.eligible) {
     const existing = input.db.checkpoint(source.agent, sessionId, input.projectId);
     if (existing) {
-      input.db.dropQueuedSession(source.agent, sessionId);
+      input.db.dropQueuedSession(source.agent, sessionId, input.projectId);
     }
     result.skipped.push(`${label}:${decision.reason}`);
     return;

@@ -114,16 +114,18 @@ function AppContent() {
   }
 
   const project = account.projects.find((entry) => entry.id === projectId) ?? account.projects[0];
-  const openProject = (id: string) => {
-    setConnecting(false);
+  // Waits for the project list so the page does not flash the previous project before the new one is listed.
+  const openProject = async (id: string) => {
     chooseProject(id);
-    void loadAccount();
+    await loadAccount();
+    setConnecting(false);
   };
   if (!project || connecting) {
     return (
       <Onboarding
         token={token}
         me={account.me}
+        projects={account.projects}
         onConnected={openProject}
         onJoined={openProject}
         onSignOut={() => void signOut()}
@@ -131,7 +133,6 @@ function AppContent() {
       />
     );
   }
-  const ownsRepository = account.projects.some((entry) => entry.role === "owner" && entry.repoId > 0);
   return (
     <Workspace
       key={project.id}
@@ -144,7 +145,7 @@ function AppContent() {
       onJoined={openProject}
       onSignOut={() => void signOut()}
       onProjectGone={projectGone}
-      onConnectRepository={ownsRepository ? undefined : () => setConnecting(true)}
+      onConnectRepository={() => setConnecting(true)}
     />
   );
 }

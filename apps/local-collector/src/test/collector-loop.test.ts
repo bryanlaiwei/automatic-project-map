@@ -41,7 +41,7 @@ function codexMessage(text: string, at: string): string {
 }
 
 function paired(db: LocalDb, deviceId = "device-1"): void {
-  db.savePairing({ projectId, trackingStartedAt, apiUrl: "http://127.0.0.1:1", deviceToken: "apm_device", deviceId });
+  db.savePairing({ projectId, projectName: "acme/loop-app", trackingStartedAt, apiUrl: "http://127.0.0.1:1", deviceToken: "apm_device", deviceId });
 }
 
 function acceptingTransport(requests: NormalizedEvent[][]): EventUploadTransport {
@@ -168,6 +168,75 @@ describe("collector loop", () => {
     const after = await loop.tick();
     expect(after).toMatchObject({ queued: 0, dropped: 2, lastError: null });
     expect(requests).toEqual([]);
+    db.close();
+  });
+
+  it("collects for several projects at once, each from its own folders with its own token", async () => {
+    const root = tempRoot();
+    const logs = join(root, "codex");
+    mkdirSync(logs);
+    const laterProject = "55555555-5555-4555-8555-555555555555";
+    const laterFolder = "/Projects/later-app";
+    // Created after the first project started tracking but before the second one did.
+    writeFileSync(join(logs, "first.jsonl"), codexSession("first-session", ["work on the first app"]));
+    writeFileSync(
+      join(logs, "later.jsonl"),
+      [
+        { timestamp: "2026-09-26T09:00:00.000Z", type: "session_meta", payload: { id: "later-session", timestamp: "2026-09-26T09:00:00.000Z", cwd: laterFolder } },
+        { timestamp: "2026-09-26T09:00:01.000Z", type: "event_msg", payload: { type: "user_message", message: "work on the later app" } },
+      ]
+        .map((line) => JSON.stringify(line))
+        .join("\n") + "\n",
+    );
+    const db = new LocalDb(join(root, "collector.sqlite"));
+    paired(db);
+    db.savePairing({
+      projectId: laterProject,
+      projectName: "acme/later-app",
+      trackingStartedAt: "2026-09-25T00:00:00.000Z",
+      apiUrl: "http://127.0.0.1:1",
+      deviceToken: "apm_later",
+      deviceId: "device-later",
+    });
+    db.addFolder(projectId, workFolder, trackingStartedAt);
+    db.addFolder(laterProject, laterFolder, trackingStartedAt);
+
+    const sent: Array<{ token: string; projectId: string; sessions: string[] }> = [];
+    let laterDown = true;
+    const loop = new CollectorLoop({
+      db,
+      logRoots: { codex: logs },
+      now: () => Date.parse("2026-09-26T10:00:00.000Z"),
+      transportFor: (pairing) => ({
+        async send(input) {
+          if (pairing.projectId === laterProject && laterDown) {
+            throw new UploadError("Service unavailable", 503);
+          }
+          sent.push({
+            token: pairing.deviceToken,
+            projectId: input.projectId,
+            sessions: [...new Set(input.events.map((event) => ("sessionId" in event.details ? String(event.details.sessionId) : "")))],
+          });
+          return { acknowledged: input.events.map((event) => event.eventId), rejected: [] };
+        },
+      }),
+    });
+
+    const first = await loop.tick();
+    expect(sent).toEqual([{ token: "apm_device", projectId, sessions: ["first-session"] }]);
+    expect(first.projects).toEqual([
+      expect.objectContaining({ projectId, projectName: "acme/loop-app", selectedFolders: 1, queued: 0, lastError: null }),
+      expect.objectContaining({ projectId: laterProject, selectedFolders: 1, queued: 2, lastError: "Service unavailable" }),
+    ]);
+    expect(first).toMatchObject({ paired: true, selectedFolders: 2, queued: 2 });
+    // The first session is older than the later project's tracking start; that must not exclude it for the first project.
+    expect(db.isExcluded("codex", "first-session", projectId)).toBe(false);
+    expect(db.isExcluded("codex", "first-session", laterProject)).toBe(true);
+
+    laterDown = false;
+    db.removePairing(projectId);
+    const second = await loop.tick();
+    expect(second.projects.map((project) => project.projectId)).toEqual([laterProject]);
     db.close();
   });
 

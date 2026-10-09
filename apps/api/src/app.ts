@@ -195,7 +195,7 @@ export function createApp(deps: AppDeps) {
         break;
       case "denied":
         res.status(403).json({
-          error: "The GitHub App is not installed on this repository, or the repository id does not match.",
+          error: `The GitHub App is not installed on ${parsed.data.owner}/${parsed.data.name}. Install it on that repository, then connect again.`,
         });
         return;
       case "not_permitted":
@@ -217,11 +217,7 @@ export function createApp(deps: AppDeps) {
     }
     const result = await connectRepository(deps.pool, { userId: user.id, owner: parsed.data.owner, name: parsed.data.name, repoId });
     if ("error" in result) {
-      const message =
-        result.error === "repo_taken"
-          ? "This repository is already connected."
-          : "You already own a connected repository.";
-      res.status(409).json({ error: message });
+      res.status(409).json({ error: "This repository is already connected." });
       return;
     }
     res.status(201).json(
@@ -299,6 +295,7 @@ export function createApp(deps: AppDeps) {
       token: exchanged.token,
       deviceId: exchanged.device.id,
       projectId: exchanged.device.projectId,
+      projectName: exchanged.projectName,
       trackingStartedAt: exchanged.device.trackingStartedAt,
     });
   });
